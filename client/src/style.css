@@ -409,6 +409,143 @@ button:disabled {
   line-height: 1.5;
 }
 
-.panel-send {
+.panel-chats {
   border-color: rgba(91, 140, 255, 0.25);
+}
+
+.chat-intro {
+  margin-top: 0;
+}
+
+.chat-tabs-wrap {
+  margin: 0.75rem 0 0;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.chat-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  min-height: 2.5rem;
+  align-items: center;
+}
+
+.chat-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.chat-tab.active {
+  border-color: var(--accent-dim);
+  background: rgba(91, 140, 255, 0.12);
+}
+
+.chat-tab-label {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.65rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tab-close {
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.2rem 0.45rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0 6px 6px 0;
+}
+
+.chat-tab-close:hover {
+  color: var(--danger);
+  background: rgba(232, 93, 106, 0.12);
+}
+
+.chat-empty-hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.88rem;
+}
+
+.chat-thread {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.chat-thread-head {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.65rem;
+  word-break: break-all;
+}
+
+.chat-messages {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.chat-line.chat-line-in {
+  align-self: flex-start;
+  max-width: 92%;
+}
+
+.chat-line.chat-line-out {
+  align-self: flex-end;
+  max-width: 92%;
+  text-align: right;
+}
+
+.chat-bubble {
+  display: inline-block;
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-line-in .chat-bubble {
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.chat-line-out .chat-bubble {
+  background: rgba(91, 140, 255, 0.2);
+  border: 1px solid rgba(91, 140, 255, 0.35);
+}
+
+.chat-ts {
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+  font-family: var(--mono);
+  opacity: 0.85;
+}
+
+.chat-line-out .chat-ts {
+  text-align: right;
 }

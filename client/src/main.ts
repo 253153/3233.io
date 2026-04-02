@@ -15,6 +15,10 @@ const LS_SERVER = "io3233_server_url";
 const LS_SK = "io3233_secret_key";
 const LS_PK = "io3233_public_key";
 const LS_TOKEN = "io3233_token";
+const LS_OPEN_CHATS = "io3233_open_chats";
+const LS_SENT = "io3233_sent_by_contact_v1";
+
+type SentLine = { ts: number; text: string };
 
 function getServerUrl(): string {
   const saved = localStorage.getItem(LS_SERVER);
@@ -35,6 +39,56 @@ function wsUrl(): string {
   const u = new URL(apiBase());
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   return u.toString().replace(/\/$/, "");
+}
+
+function normalizeFingerprint(raw: string): string | null {
+  const s = raw.replace(/\s+/g, "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(s)) return null;
+  return s;
+}
+
+function loadOpenChats(): string[] {
+  try {
+    const raw = localStorage.getItem(LS_OPEN_CHATS);
+    if (!raw) return [];
+    const j = JSON.parse(raw) as string[];
+    if (!Array.isArray(j)) return [];
+    const out: string[] = [];
+    for (const x of j) {
+      const n = normalizeFingerprint(String(x));
+      if (n && !out.includes(n)) out.push(n);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function saveOpenChats(ids: string[]) {
+  localStorage.setItem(LS_OPEN_CHATS, JSON.stringify(ids));
+}
+
+function loadSentMap(): Record<string, SentLine[]> {
+  try {
+    const raw = localStorage.getItem(LS_SENT);
+    if (!raw) return {};
+    const j = JSON.parse(raw) as Record<string, SentLine[]>;
+    return j && typeof j === "object" ? j : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSentMap(m: Record<string, SentLine[]>) {
+  localStorage.setItem(LS_SENT, JSON.stringify(m));
+}
+
+function appendSent(toFp: string, text: string) {
+  const fp = toFp.toLowerCase();
+  const m = loadSentMap();
+  if (!m[fp]) m[fp] = [];
+  m[fp].push({ ts: Date.now(), text });
+  saveSentMap(m);
 }
 
 async function loadOrCreateKeys(): Promise<{ pair: BoxKeyPair; fingerprint: string }> {
@@ -68,6 +122,9 @@ type LibraryEntry = {
   id: number;
   text: string;
   meta: string;
+  /** Sender fingerprint (lowercase hex), for threading. */
+  senderFp: string | null;
+  serverTs: number;
 };
 
 const libraryEntries: LibraryEntry[] = [];
@@ -76,6 +133,11 @@ let didFullBackfill = false;
 
 let libraryPage = 1;
 let librarySearchQuery = "";
+
+/** Set from main(): add tabs for all senders in inbox after history sync. */
+let syncTabsAfterBackfill: (() => void) | undefined;
+/** Set from main(): new message from poll/WS — open or focus sender tab. */
+let onNewPolledEntry: ((entry: LibraryEntry) => void) | undefined;
 
 async function register(pair: BoxKeyPair): Promise<{ ok: boolean; err?: string }> {
   const r = await fetch(`${apiBase()}/v1/register`, {
@@ -195,6 +257,10 @@ type ServerMessage = {
 };
 
 function decryptServerMessage(m: ServerMessage, pair: BoxKeyPair): LibraryEntry {
+  const serverTs = Date.parse(m.created_at) || 0;
+  const senderFp = m.sender_fingerprint
+    ? m.sender_fingerprint.toLowerCase()
+    : null;
   const ct = b64decode(m.ciphertext);
   const nonce = b64decode(m.nonce);
   const senderPk = b64decode(m.sender_public_key);
@@ -204,6 +270,8 @@ function decryptServerMessage(m: ServerMessage, pair: BoxKeyPair): LibraryEntry 
       id: m.id,
       text: "(decrypt failed)",
       meta: `#${m.id} · ${m.created_at}`,
+      senderFp,
+      serverTs,
     };
   }
   const txt = new TextDecoder().decode(plain);
@@ -221,14 +289,17 @@ function decryptServerMessage(m: ServerMessage, pair: BoxKeyPair): LibraryEntry 
     id: m.id,
     text: display,
     meta: `${short} · ${m.created_at}`,
+    senderFp,
+    serverTs,
   };
 }
 
-function mergeLibraryEntry(entry: LibraryEntry) {
-  if (libraryById.has(entry.id)) return;
+function mergeLibraryEntry(entry: LibraryEntry): boolean {
+  if (libraryById.has(entry.id)) return false;
   libraryById.set(entry.id, entry);
   libraryEntries.push(entry);
   libraryEntries.sort((a, b) => b.id - a.id);
+  return true;
 }
 
 /** Load all stored messages once per session (paged on server). */
@@ -254,6 +325,7 @@ async function backfillLibrary(pair: BoxKeyPair): Promise<void> {
     if (j.messages.length < FETCH_BATCH) break;
   }
   didFullBackfill = true;
+  syncTabsAfterBackfill?.();
 }
 
 async function pullNewMessages(pair: BoxKeyPair): Promise<void> {
@@ -269,7 +341,9 @@ async function pullNewMessages(pair: BoxKeyPair): Promise<void> {
     if (m.id <= lastMsgId) continue;
     lastMsgId = m.id;
     const entry = decryptServerMessage(m, pair);
-    mergeLibraryEntry(entry);
+    if (mergeLibraryEntry(entry)) {
+      onNewPolledEntry?.(entry);
+    }
   }
 }
 
@@ -384,20 +458,31 @@ async function main() {
       </div>
     </header>
 
-    <div class="panel panel-send">
-      <h2>Send</h2>
+    <div class="panel panel-chats">
+      <h2>Chats</h2>
+      <p class="key-intro chat-intro">When someone messages you, a tab opens for them automatically. You can also paste a <strong>fingerprint</strong> (64 hex) and click Open chat. End-to-end encrypted.</p>
       <div class="row">
         <div style="flex:2 1 220px">
-          <label for="recipient">Recipient fingerprint (64 hex)</label>
-          <input type="text" id="recipient" placeholder="abc123… (from your contact)" autocomplete="off" />
+          <label for="openChatFp">Contact fingerprint (64 hex)</label>
+          <input type="text" id="openChatFp" placeholder="Paste fingerprint, then Open chat" autocomplete="off" />
         </div>
+        <button type="button" id="openChatBtn">Open chat</button>
       </div>
-      <label for="body">Message</label>
-      <textarea id="body" placeholder="Encrypted to your contact's public key"></textarea>
-      <div class="row" style="margin-top:0.75rem">
-        <button type="button" id="sendBtn">Send</button>
+      <p class="status" id="openChatStatus"></p>
+      <div class="chat-tabs-wrap">
+        <div class="chat-tabs" id="chatTabs"></div>
       </div>
-      <p class="status" id="sendStatus"></p>
+      <p class="status chat-empty-hint" id="chatEmptyHint">No chat open — paste a fingerprint above and click Open chat.</p>
+      <div class="chat-thread" id="chatThread" hidden>
+        <div class="chat-thread-head" id="chatThreadHead"></div>
+        <div class="chat-messages" id="chatMessages"></div>
+        <label for="chatBody">Message</label>
+        <textarea id="chatBody" placeholder="Type a message…" rows="4"></textarea>
+        <div class="row" style="margin-top:0.5rem">
+          <button type="button" id="chatSend">Send</button>
+        </div>
+        <p class="status" id="chatSendStatus"></p>
+      </div>
     </div>
 
     <div class="panel">
@@ -497,10 +582,17 @@ async function main() {
   const regStatus = app.querySelector("#regStatus")!;
   const registerBtn = app.querySelector("#registerBtn")!;
   const newKeys = app.querySelector("#newKeys")!;
-  const recipientEl = app.querySelector<HTMLInputElement>("#recipient")!;
-  const bodyEl = app.querySelector<HTMLInputElement>("#body")!;
-  const sendBtn = app.querySelector<HTMLButtonElement>("#sendBtn")!;
-  const sendStatus = app.querySelector("#sendStatus")!;
+  const openChatFpEl = app.querySelector<HTMLInputElement>("#openChatFp")!;
+  const openChatBtn = app.querySelector<HTMLButtonElement>("#openChatBtn")!;
+  const chatTabsEl = app.querySelector("#chatTabs")!;
+  const chatThread = app.querySelector<HTMLElement>("#chatThread")!;
+  const chatThreadHead = app.querySelector("#chatThreadHead")!;
+  const chatMessages = app.querySelector("#chatMessages")!;
+  const chatBodyEl = app.querySelector<HTMLTextAreaElement>("#chatBody")!;
+  const chatSend = app.querySelector<HTMLButtonElement>("#chatSend")!;
+  const chatSendStatus = app.querySelector("#chatSendStatus")!;
+  const chatEmptyHint = app.querySelector<HTMLElement>("#chatEmptyHint")!;
+  const openChatStatus = app.querySelector("#openChatStatus")!;
   const libraryList = app.querySelector("#libraryList")!;
   const librarySearch = app.querySelector<HTMLInputElement>("#librarySearch")!;
   const libraryPager = app.querySelector<HTMLElement>("#libraryPager")!;
@@ -513,6 +605,10 @@ async function main() {
   fpFullEl.textContent = fingerprint;
   pubKeyB64.textContent = b64encode(pair.publicKey);
   privKeyB64.textContent = b64encode(pair.secretKey);
+
+  let openChatIds: string[] = loadOpenChats();
+  let activeChatFp: string | null =
+    openChatIds.length > 0 ? openChatIds[0]! : null;
 
   void renderContactQrs();
 
@@ -571,6 +667,106 @@ async function main() {
     d.textContent = s;
     return d.innerHTML;
   }
+
+  function renderChatTabs() {
+    chatTabsEl.innerHTML = "";
+    for (const fp of openChatIds) {
+      const wrap = document.createElement("div");
+      wrap.className = "chat-tab" + (fp === activeChatFp ? " active" : "");
+      const label = document.createElement("button");
+      label.type = "button";
+      label.className = "chat-tab-label";
+      label.textContent = shortFingerprint(fp);
+      label.title = fp;
+      label.addEventListener("click", () => {
+        activeChatFp = fp;
+        renderChatTabs();
+        renderActiveThread();
+      });
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "chat-tab-close";
+      close.setAttribute("aria-label", "Close chat");
+      close.textContent = "×";
+      close.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        openChatIds = openChatIds.filter((id) => id !== fp);
+        saveOpenChats(openChatIds);
+        if (activeChatFp === fp) {
+          activeChatFp = openChatIds[0] ?? null;
+        }
+        renderChatTabs();
+        renderActiveThread();
+      });
+      wrap.appendChild(label);
+      wrap.appendChild(close);
+      chatTabsEl.appendChild(wrap);
+    }
+  }
+
+  function renderActiveThread() {
+    if (!activeChatFp) {
+      chatThread.hidden = true;
+      chatEmptyHint.hidden = false;
+      return;
+    }
+    chatEmptyHint.hidden = true;
+    chatThread.hidden = false;
+    chatThreadHead.textContent = `${shortFingerprint(activeChatFp)} · ${activeChatFp.slice(0, 18)}…`;
+    const incoming = libraryEntries.filter((e) => e.senderFp === activeChatFp);
+    const sent = loadSentMap()[activeChatFp] ?? [];
+    const lines: { kind: "in" | "out"; ts: number; text: string }[] = [];
+    for (const e of incoming) {
+      lines.push({ kind: "in", ts: e.serverTs, text: e.text });
+    }
+    for (const s of sent) {
+      lines.push({ kind: "out", ts: s.ts, text: s.text });
+    }
+    lines.sort((a, b) => a.ts - b.ts);
+    chatMessages.innerHTML = "";
+    for (const L of lines) {
+      const row = document.createElement("div");
+      row.className =
+        "chat-line " + (L.kind === "out" ? "chat-line-out" : "chat-line-in");
+      row.innerHTML = `<div class="chat-bubble">${escapeHtml(L.text)}</div><div class="chat-ts">${escapeHtml(
+        new Date(L.ts).toLocaleString(),
+      )}</div>`;
+      chatMessages.appendChild(row);
+    }
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  syncTabsAfterBackfill = () => {
+    const seen = new Set<string>();
+    for (const e of libraryEntries) {
+      if (e.senderFp) seen.add(e.senderFp);
+    }
+    let changed = false;
+    for (const fp of seen) {
+      if (!openChatIds.includes(fp)) {
+        openChatIds.push(fp);
+        changed = true;
+      }
+    }
+    if (changed) saveOpenChats(openChatIds);
+    if (!activeChatFp && openChatIds.length > 0) {
+      activeChatFp = openChatIds[0]!;
+    }
+    renderChatTabs();
+    renderActiveThread();
+  };
+
+  onNewPolledEntry = (entry) => {
+    const fp = entry.senderFp;
+    if (!fp) return;
+    if (!openChatIds.includes(fp)) {
+      openChatIds.push(fp);
+      saveOpenChats(openChatIds);
+    }
+    activeChatFp = fp;
+    renderChatTabs();
+    renderActiveThread();
+  };
 
   function resetLibraryState() {
     lastMsgId = 0;
@@ -667,6 +863,7 @@ async function main() {
         : `Page ${libraryPage} of ${totalPages} · ${filtered.length} ${filtered.length === 1 ? "entry" : "entries"}`;
     libraryPrev.disabled = libraryPage <= 1;
     libraryNext.disabled = libraryPage >= totalPages;
+    renderActiveThread();
   }
 
   async function refreshLibrary() {
@@ -740,37 +937,70 @@ async function main() {
     localStorage.removeItem(LS_SK);
     localStorage.removeItem(LS_PK);
     localStorage.removeItem(LS_TOKEN);
+    localStorage.removeItem(LS_OPEN_CHATS);
+    localStorage.removeItem(LS_SENT);
     location.reload();
   });
 
-  sendBtn.addEventListener("click", async () => {
-    sendStatus.textContent = "";
-    sendStatus.className = "status";
-    const rf = recipientEl.value.trim();
-    if (!/^[0-9a-fA-F]{64}$/.test(rf)) {
-      sendStatus.textContent = "Recipient must be 64 hex characters.";
-      sendStatus.className = "status err";
+  function openChatFromInput() {
+    openChatStatus.textContent = "";
+    openChatStatus.className = "status";
+    const fp = normalizeFingerprint(openChatFpEl.value);
+    if (!fp) {
+      openChatStatus.textContent = "Enter a valid 64-character hex fingerprint.";
+      openChatStatus.className = "status err";
       return;
     }
-    const text = bodyEl.value.trim();
-    if (!text) {
-      sendStatus.textContent = "Enter a message.";
-      sendStatus.className = "status err";
-      return;
+    if (!openChatIds.includes(fp)) {
+      openChatIds.push(fp);
+      saveOpenChats(openChatIds);
     }
-    sendBtn.disabled = true;
-    const res = await sendMessage(pair, rf, text);
-    sendBtn.disabled = false;
-    if (res.ok) {
-      sendStatus.textContent = "Sent.";
-      sendStatus.className = "status ok";
-      bodyEl.value = "";
-    } else {
-      sendStatus.textContent = res.err ?? "Send failed";
-      sendStatus.className = "status err";
+    activeChatFp = fp;
+    openChatFpEl.value = "";
+    renderChatTabs();
+    renderActiveThread();
+  }
+
+  openChatBtn.addEventListener("click", openChatFromInput);
+  openChatFpEl.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      openChatFromInput();
     }
   });
 
+  chatSend.addEventListener("click", async () => {
+    chatSendStatus.textContent = "";
+    chatSendStatus.className = "status";
+    const rf = activeChatFp;
+    if (!rf) {
+      chatSendStatus.textContent = "Open a chat tab first.";
+      chatSendStatus.className = "status err";
+      return;
+    }
+    const text = chatBodyEl.value.trim();
+    if (!text) {
+      chatSendStatus.textContent = "Enter a message.";
+      chatSendStatus.className = "status err";
+      return;
+    }
+    chatSend.disabled = true;
+    const res = await sendMessage(pair, rf, text);
+    chatSend.disabled = false;
+    if (res.ok) {
+      chatSendStatus.textContent = "Sent.";
+      chatSendStatus.className = "status ok";
+      appendSent(rf, text);
+      chatBodyEl.value = "";
+      renderActiveThread();
+    } else {
+      chatSendStatus.textContent = res.err ?? "Send failed";
+      chatSendStatus.className = "status err";
+    }
+  });
+
+  renderChatTabs();
+  renderActiveThread();
   renderLibrary();
   await runSessionSetup({ resetLibrary: false });
   window.setInterval(() => void refreshLibrary(), 30000);
