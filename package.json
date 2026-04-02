@@ -1,0 +1,12 @@
+{
+  "name": "3233-io",
+  "private": true,
+  "workspaces": [
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w client",
+    "build": "npm run build -w client",
+    "dev:server": "cd server && JWT_SECRET=dev-secret cargo run"
+  }
+}

@@ -1,0 +1,15 @@
+services:
+  io3233:
+    build: .
+    ports:
+      - "3233:3233"
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      MESSAGE_TTL_DAYS: ${MESSAGE_TTL_DAYS:-14}
+      MAX_MESSAGE_BYTES: ${MAX_MESSAGE_BYTES:-262144}
+      JWT_EXPIRY_SEC: ${JWT_EXPIRY_SEC:-604800}
+    volumes:
+      - io3233-data:/app/data
+
+volumes:
+  io3233-data:
