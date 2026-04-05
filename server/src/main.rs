@@ -20,10 +20,11 @@ use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
 use std::env;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -594,9 +595,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state);
 
     let app = if let Ok(dir) = env::var("STATIC_DIR") {
+        let base = PathBuf::from(&dir);
+        let index_html = base.join("index.html");
+        let static_service = ServeDir::new(&dir).fallback(ServeFile::new(index_html));
         Router::new()
             .merge(api)
-            .fallback_service(ServeDir::new(dir))
+            .fallback_service(static_service)
     } else {
         api
     };

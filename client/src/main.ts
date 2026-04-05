@@ -47,6 +47,110 @@ function normalizeFingerprint(raw: string): string | null {
   return s;
 }
 
+/** Absolute http(s) API base, or null */
+function parseHttpUrlOrNull(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return null;
+  try {
+    const u = new URL(t);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return t.replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+const VIEW_IDS = ["chats", "server", "keys", "library", "about"] as const;
+type ViewId = (typeof VIEW_IDS)[number];
+
+function normalizePathname(pathname: string): string {
+  const p = pathname.replace(/\/$/, "");
+  return p === "" ? "/" : p;
+}
+
+function pathnameToView(pathname: string): ViewId | null {
+  const p = normalizePathname(pathname);
+  if (p === "/") return null;
+  const seg = p.slice(1);
+  if (seg.includes("/")) return null;
+  return VIEW_IDS.includes(seg as ViewId) ? (seg as ViewId) : null;
+}
+
+function viewToPath(view: string): string {
+  return "/" + view;
+}
+
+const ROUTE_SEO: Record<ViewId, { title: string; description: string }> = {
+  chats: {
+    title: "Chats — 3233.io · ~/encrypted relay",
+    description:
+      "End-to-end encrypted chats. Paste a contact’s public key fingerprint, share your invite link, or wait for inbound mail. Keys stay in your browser.",
+  },
+  server: {
+    title: "Server — 3233.io · ~/encrypted relay",
+    description:
+      "Choose your API relay base URL, see registration stats, and learn offline message retention policy for this self-hosted encrypted relay.",
+  },
+  keys: {
+    title: "Keys — 3233.io · ~/encrypted relay",
+    description:
+      "Export your NaCl box public and private keys, fingerprint, and QR codes. Your secret key never leaves this device unless you download it.",
+  },
+  library: {
+    title: "Library — 3233.io · ~/encrypted relay",
+    description:
+      "Search decrypted message history stored locally in your browser. Offline inbox archive for your end-to-end encrypted conversations.",
+  },
+  about: {
+    title: "About — 3233.io · ~/encrypted relay",
+    description:
+      "Why 3233 is safe: end-to-end encryption with tweetnacl, minimal trust in the relay, and auditable open-source MIT-licensed client code.",
+  },
+};
+
+function setMetaByName(name: string, content: string) {
+  let el = document.querySelector(`meta[name="${name}"]`) as HTMLMetaElement | null;
+  if (!el) {
+    el = document.createElement("meta");
+    el.setAttribute("name", name);
+    document.head.appendChild(el);
+  }
+  el.setAttribute("content", content);
+}
+
+function setMetaByProperty(property: string, content: string) {
+  let el = document.querySelector(`meta[property="${property}"]`) as HTMLMetaElement | null;
+  if (!el) {
+    el = document.createElement("meta");
+    el.setAttribute("property", property);
+    document.head.appendChild(el);
+  }
+  el.setAttribute("content", content);
+}
+
+function setCanonicalLink(href: string) {
+  let el = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+  if (!el) {
+    el = document.createElement("link");
+    el.setAttribute("rel", "canonical");
+    document.head.appendChild(el);
+  }
+  el.setAttribute("href", href);
+}
+
+function applyRouteSeo(view: ViewId) {
+  const seo = ROUTE_SEO[view];
+  document.title = seo.title;
+  setMetaByName("description", seo.description);
+  setMetaByProperty("og:title", seo.title);
+  setMetaByProperty("og:description", seo.description);
+  const url = `${window.location.origin}${viewToPath(view)}`;
+  setMetaByProperty("og:url", url);
+  setMetaByName("twitter:title", seo.title);
+  setMetaByName("twitter:description", seo.description);
+  setCanonicalLink(url);
+}
+
 function loadOpenChats(): string[] {
   try {
     const raw = localStorage.getItem(LS_OPEN_CHATS);
@@ -447,121 +551,244 @@ async function main() {
 
   const app = document.querySelector("#app")!;
   app.innerHTML = `
-    <header class="app-header">
-      <div class="header-brand">
-        <h1>3233.io</h1>
-        <p class="sub">End-to-end encrypted relay. Keys stay in your browser.</p>
-      </div>
-      <div class="header-live" id="liveStrip">
-        <span id="liveIndicator" class="live-badge connecting">Connecting…</span>
-        <span class="live-hint" id="liveHint"></span>
+    <header class="site-header">
+      <div class="site-brand">
+        <a href="/chats" class="brand-name"><b>3233</b></a>
+        <span class="brand-path">~/encrypted relay</span>
       </div>
     </header>
 
-    <div class="panel panel-chats">
-      <h2>Chats</h2>
-      <p class="key-intro chat-intro">When someone messages you, a tab opens for them automatically. You can also paste a <strong>fingerprint</strong> (64 hex) and click Open chat. End-to-end encrypted.</p>
-      <div class="row">
-        <div style="flex:2 1 220px">
-          <label for="openChatFp">Contact fingerprint (64 hex)</label>
-          <input type="text" id="openChatFp" placeholder="Paste fingerprint, then Open chat" autocomplete="off" />
-        </div>
-        <button type="button" id="openChatBtn">Open chat</button>
-      </div>
-      <p class="status" id="openChatStatus"></p>
-      <div class="chat-tabs-wrap">
-        <div class="chat-tabs" id="chatTabs"></div>
-      </div>
-      <p class="status chat-empty-hint" id="chatEmptyHint">No chat open — paste a fingerprint above and click Open chat.</p>
-      <div class="chat-thread" id="chatThread" hidden>
-        <div class="chat-thread-head" id="chatThreadHead"></div>
-        <div class="chat-messages" id="chatMessages"></div>
-        <label for="chatBody">Message</label>
-        <textarea id="chatBody" placeholder="Type a message…" rows="4"></textarea>
-        <div class="row" style="margin-top:0.5rem">
-          <button type="button" id="chatSend">Send</button>
-        </div>
-        <p class="status" id="chatSendStatus"></p>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>Server</h2>
-      <div class="row">
-        <div>
-          <label for="serverUrl">Base URL</label>
-          <input type="text" id="serverUrl" placeholder="https://chat.example.com" autocomplete="off" />
-        </div>
-        <button type="button" class="secondary" id="saveServer">Save</button>
-      </div>
-      <p class="server-stats" id="serverStats">
-        Unique identities registered on this server (all time): <strong id="statsIdentities">—</strong>
-      </p>
-      <p class="server-retention" id="serverRetention">
-        Outbound messages wait on the server until your contact picks them up. Anything still in the queue after
-        <strong><span id="retentionDays">—</span> days</strong> is deleted automatically (this server’s policy).
-      </p>
-      <p class="status" id="serverStatus"></p>
-    </div>
-
-    <div class="panel">
-      <h2>Your keys</h2>
-      <p class="key-intro">Your <strong>fingerprint</strong> is your address on this network. Share it so others can send you messages.</p>
-
-      <div class="key-block key-public">
-        <div class="key-label">Public key <span class="key-tag">safe to share</span></div>
-        <p class="key-help">Give this to contacts (or they can fetch it from the server using your fingerprint). Needed so others can encrypt to you.</p>
-        <p class="fp mono" id="pubKeyB64"></p>
-        <div class="row key-download-row">
-          <button type="button" class="secondary" id="dlPublic">Download public key (.txt)</button>
-        </div>
-        <p class="fp-label">Fingerprint (short)</p>
-        <p class="fp" id="fpShort"></p>
-        <p class="fp-label">Fingerprint (full hex)</p>
-        <p class="fp" id="fpFull"></p>
-        <div class="qr-row">
-          <div class="qr-wrap">
-            <p class="qr-caption">Contact QR <span class="qr-hint">(fingerprint + server)</span></p>
-            <img id="qrContact" class="qr-img" width="180" height="180" alt="" />
+    <div class="app-shell">
+      <aside class="app-sidebar" aria-label="Sidebar">
+        <details class="sidebar-block sidebar-chats" open>
+          <summary class="sidebar-summary">Chats»</summary>
+          <div class="sidebar-chats-inner">
+            <p class="sidebar-kv sidebar-kv--you">
+              <span class="sidebar-k">fp</span>
+              <span id="sidebarFpShort" class="mono"></span>
+            </p>
+            <p class="sidebar-session-hint">E2E · server never sees plaintext</p>
+            <div class="sidebar-chat-tabs-wrap">
+              <div id="chatTabs" class="chat-tabs chat-tabs--sidebar"></div>
+            </div>
           </div>
-          <div class="qr-wrap">
-            <p class="qr-caption">Public key QR <span class="qr-hint">(base64)</span></p>
-            <img id="qrPublic" class="qr-img" width="180" height="180" alt="" />
+        </details>
+      </aside>
+
+      <main class="app-main">
+        <nav class="dashboard-tabs" role="tablist" aria-label="Main views">
+          <button type="button" role="tab" class="dash-tab active" data-view="chats" aria-selected="true" id="tab-chats">chats</button>
+          <button type="button" role="tab" class="dash-tab" data-view="server" aria-selected="false" id="tab-server">server</button>
+          <button type="button" role="tab" class="dash-tab" data-view="keys" aria-selected="false" id="tab-keys">keys</button>
+          <button type="button" role="tab" class="dash-tab" data-view="library" aria-selected="false" id="tab-library">library</button>
+          <button type="button" role="tab" class="dash-tab" data-view="about" aria-selected="false" id="tab-about">about</button>
+        </nav>
+
+        <section id="view-chats" class="view-panel" role="tabpanel" aria-labelledby="tab-chats">
+          <p class="key-intro chat-intro">
+            New messages open a thread in the sidebar. To start a chat, paste the other person’s <strong>public key fingerprint</strong> (64 hex characters — the address they share).
+          </p>
+          <div class="invite-link-block">
+            <p class="invite-link-hint">
+              Share your identity: select text in the fields below and copy (right-click → Copy, or Ctrl+C / ⌘+C). Triple-click selects a whole line.
+            </p>
+            <div class="share-field-group">
+              <label for="inviteLinkInput">Invite link</label>
+              <input
+                type="text"
+                id="inviteLinkInput"
+                readonly
+                spellcheck="false"
+                autocomplete="off"
+                class="share-field-input"
+                title="Read-only — select text, then copy"
+              />
+            </div>
+            <div class="share-field-group">
+              <label for="publicKeyShareInput">Your public key (base64)</label>
+              <input
+                type="text"
+                id="publicKeyShareInput"
+                readonly
+                spellcheck="false"
+                autocomplete="off"
+                class="share-field-input"
+                title="Read-only — select text, then copy"
+              />
+            </div>
           </div>
-        </div>
-      </div>
+          <div class="row">
+            <div style="flex:2 1 220px">
+              <label for="openChatFp">Their public key (fingerprint, 64 hex)</label>
+              <input
+                type="text"
+                id="openChatFp"
+                placeholder="Paste the contact’s public key fingerprint…"
+                autocomplete="off"
+              />
+            </div>
+            <button type="button" id="openChatBtn">Open chat</button>
+          </div>
+          <p class="status" id="openChatStatus"></p>
+          <p class="status chat-empty-hint" id="chatEmptyHint">No thread — add someone’s public key above, share your invite link or public key from the fields above, or wait for inbound mail.</p>
+          <div class="chat-thread" id="chatThread" hidden>
+            <div class="chat-with-block">
+              <div class="chat-with-label">Contact — their public key fingerprint</div>
+              <p class="chat-thread-id mono" id="chatThreadHead"></p>
+              <p class="chat-thread-hint">
+                This is the person you’re messaging (recipient), not your own key. Your fingerprint is under <strong>Chats»</strong> in the sidebar.
+              </p>
+            </div>
+            <div class="chat-composer">
+              <label for="chatBody">Message</label>
+              <textarea id="chatBody" placeholder="Type a message…" rows="4"></textarea>
+              <div class="row chat-composer-actions">
+                <button type="button" id="chatSend">Send</button>
+              </div>
+              <p class="status" id="chatSendStatus"></p>
+            </div>
+            <div class="chat-messages" id="chatMessages"></div>
+          </div>
+        </section>
 
-      <div class="key-block key-private">
-        <div class="key-label">Private key <span class="key-tag key-tag-danger">never share</span></div>
-        <p class="key-help">Anyone with this can read your messages and impersonate you. It never leaves your browser unless you copy or download it.</p>
-        <p class="fp mono" id="privKeyB64"></p>
-        <div class="row key-download-row">
-          <button type="button" class="secondary" id="dlPrivate">Download private key (.txt)</button>
-        </div>
-      </div>
+        <section id="view-server" class="view-panel" role="tabpanel" aria-labelledby="tab-server" hidden>
+          <div class="row">
+            <div>
+              <label for="serverUrl">API base URL</label>
+              <input type="text" id="serverUrl" placeholder="https://chat.example.com" autocomplete="off" />
+            </div>
+            <button type="button" class="secondary" id="saveServer">Save</button>
+          </div>
+          <p class="server-stats" id="serverStats">
+            Registered identities (all time): <strong id="statsIdentities">—</strong>
+          </p>
+          <p class="server-retention" id="serverRetention">
+            Queued mail is deleted after <strong><span id="retentionDays">—</span> days</strong> if not collected (server policy).
+          </p>
+          <p class="status" id="serverStatus"></p>
+        </section>
 
-      <div class="row" style="margin-top:0.75rem">
-        <button type="button" class="secondary" id="newKeys">New keys (clears session)</button>
-        <button type="button" class="secondary" id="registerBtn">Register again</button>
-      </div>
-      <p class="status" id="regStatus"></p>
+        <section id="view-keys" class="view-panel" role="tabpanel" aria-labelledby="tab-keys" hidden>
+          <p class="key-intro"><strong>Fingerprint</strong> = your address. Share it so others can reach you.</p>
+
+          <details class="key-disclosure" open>
+            <summary class="key-summary">Public» <span class="key-tag">safe to share</span></summary>
+            <div class="key-disclosure-body">
+              <div class="key-block key-public">
+                <p class="key-help">Contacts need this to encrypt to you (or fetch by fingerprint from this server).</p>
+                <label for="pubKeyB64">Public key (base64)</label>
+                <textarea
+                  id="pubKeyB64"
+                  readonly
+                  spellcheck="false"
+                  autocomplete="off"
+                  rows="3"
+                  class="share-field-textarea key-pub-field"
+                  title="Read-only — select text, then copy"
+                ></textarea>
+                <div class="row key-download-row">
+                  <button type="button" class="secondary" id="dlPublic">Download public key (.txt)</button>
+                </div>
+                <p class="fp-label">Fingerprint (short)</p>
+                <p class="fp" id="fpShort"></p>
+                <p class="fp-label">Fingerprint (full hex)</p>
+                <p class="fp" id="fpFull"></p>
+                <div class="qr-row">
+                  <div class="qr-wrap">
+                    <p class="qr-caption">Contact QR <span class="qr-hint">fingerprint + server</span></p>
+                    <img id="qrContact" class="qr-img" width="180" height="180" alt="" />
+                  </div>
+                  <div class="qr-wrap">
+                    <p class="qr-caption">Public key QR <span class="qr-hint">base64</span></p>
+                    <img id="qrPublic" class="qr-img" width="180" height="180" alt="" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="key-disclosure" open>
+            <summary class="key-summary">Private» <span class="key-tag key-tag-danger">never share</span></summary>
+            <div class="key-disclosure-body">
+              <div class="key-block key-private">
+                <p class="key-help">Full access + impersonation. Stays in-browser unless you export.</p>
+                <p class="fp mono" id="privKeyB64"></p>
+                <div class="row key-download-row">
+                  <button type="button" class="secondary" id="dlPrivate">Download private key (.txt)</button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <div class="row" style="margin-top:0.75rem">
+            <button type="button" class="secondary" id="newKeys">New keys</button>
+            <button type="button" class="secondary" id="registerBtn">Re-register</button>
+          </div>
+          <p class="status" id="regStatus"></p>
+        </section>
+
+        <section id="view-library" class="view-panel" role="tabpanel" aria-labelledby="tab-library" hidden>
+          <p class="key-intro"><span class="badge">local decrypt</span> Inbox history stored in this tab.</p>
+          <div class="row">
+            <div style="flex:2 1 220px">
+              <label for="librarySearch">Search</label>
+              <input type="text" id="librarySearch" placeholder="text, sender, date…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="messages" id="libraryList"></div>
+          <div class="library-pager" id="libraryPager">
+            <button type="button" class="secondary" id="libraryPrev">Previous</button>
+            <span class="library-page-info" id="libraryPageInfo"></span>
+            <button type="button" class="secondary" id="libraryNext">Next</button>
+          </div>
+        </section>
+
+        <section id="view-about" class="view-panel" role="tabpanel" aria-labelledby="tab-about" hidden>
+          <div class="panel about-panel">
+            <h2>Why it’s safe</h2>
+            <p class="about-lead">
+              This app is built for <strong>end-to-end encryption</strong>: only you and your contact can read message content.
+            </p>
+            <ul class="about-list">
+              <li>
+                <strong>Keys stay in your browser.</strong> Your secret key never leaves this device unless you explicitly export it. The relay never receives it.
+              </li>
+              <li>
+                <strong>The server never sees plaintext.</strong> Outgoing mail is encrypted on your machine with <span class="mono-inline">tweetnacl</span> (NaCl box: Curve25519 + XSalsa20-Poly1305). The relay stores and forwards ciphertext only — it cannot decrypt your conversations.
+              </li>
+              <li>
+                <strong>Minimal trust in infrastructure.</strong> A compromised or nosy host still cannot read your messages without your keys. Worst case it can affect availability or metadata policy, not message contents.
+              </li>
+            </ul>
+          </div>
+          <div class="panel about-panel">
+            <h2>Verify the code · run it yourself</h2>
+            <p class="about-lead">
+              The project is <strong>open source</strong> (MIT). You are not asked to trust a black box.
+            </p>
+            <ul class="about-list">
+              <li>
+                <strong>Auditable client.</strong> All cryptography runs in this page’s JavaScript — read <span class="mono-inline">client/src/crypto.ts</span> and follow the data path from compose → encrypt → network. Build the same bundle and compare hashes if you want hard verification.
+              </li>
+              <li>
+                <strong>Self-host everything.</strong> Run your own API relay and serve this static client from your machine or CDN. Point the <strong>server</strong> tab at your base URL and you control retention, uptime, and who can register.
+              </li>
+              <li>
+                <strong>FOSS freedom.</strong> Use, modify, and redistribute the software under the MIT License. No vendor lock-in: your keys and your deployment are yours.
+              </li>
+            </ul>
+          </div>
+        </section>
+      </main>
     </div>
 
-    <div class="panel">
-      <h2>Library <span class="badge">decrypted locally</span></h2>
-      <div class="row">
-        <div style="flex:2 1 220px">
-          <label for="librarySearch">Search</label>
-          <input type="text" id="librarySearch" placeholder="Filter by text, sender, or date…" autocomplete="off" />
-        </div>
+    <footer class="site-footer">
+      <div class="footer-live" id="liveStrip" aria-label="Connection status">
+        <span id="liveIndicator" class="live-badge connecting">Connecting…</span>
+        <span class="live-hint" id="liveHint"></span>
       </div>
-      <div class="messages" id="libraryList"></div>
-      <div class="library-pager" id="libraryPager">
-        <button type="button" class="secondary" id="libraryPrev">Previous</button>
-        <span class="library-page-info" id="libraryPageInfo"></span>
-        <button type="button" class="secondary" id="libraryNext">Next</button>
-      </div>
-    </div>
+      <p class="footer-meta">v0.1.0 · Made with ☕ + ♥️ · © 2026 3233.io</p>
+    </footer>
   `;
 
   const liveIndicator = app.querySelector("#liveIndicator")!;
@@ -575,13 +802,15 @@ async function main() {
   const qrPublic = app.querySelector<HTMLImageElement>("#qrPublic")!;
   const dlPublic = app.querySelector<HTMLButtonElement>("#dlPublic")!;
   const dlPrivate = app.querySelector<HTMLButtonElement>("#dlPrivate")!;
-  const pubKeyB64 = app.querySelector("#pubKeyB64")!;
+  const pubKeyB64 = app.querySelector<HTMLTextAreaElement>("#pubKeyB64")!;
   const privKeyB64 = app.querySelector("#privKeyB64")!;
   const fpShortEl = app.querySelector("#fpShort")!;
   const fpFullEl = app.querySelector("#fpFull")!;
-  const regStatus = app.querySelector("#regStatus")!;
+  const regStatus = app.querySelector<HTMLElement>("#regStatus")!;
   const registerBtn = app.querySelector("#registerBtn")!;
   const newKeys = app.querySelector("#newKeys")!;
+  const inviteLinkInput = app.querySelector<HTMLInputElement>("#inviteLinkInput")!;
+  const publicKeyShareInput = app.querySelector<HTMLInputElement>("#publicKeyShareInput")!;
   const openChatFpEl = app.querySelector<HTMLInputElement>("#openChatFp")!;
   const openChatBtn = app.querySelector<HTMLButtonElement>("#openChatBtn")!;
   const chatTabsEl = app.querySelector("#chatTabs")!;
@@ -592,23 +821,174 @@ async function main() {
   const chatSend = app.querySelector<HTMLButtonElement>("#chatSend")!;
   const chatSendStatus = app.querySelector("#chatSendStatus")!;
   const chatEmptyHint = app.querySelector<HTMLElement>("#chatEmptyHint")!;
-  const openChatStatus = app.querySelector("#openChatStatus")!;
+  const openChatStatus = app.querySelector<HTMLElement>("#openChatStatus")!;
   const libraryList = app.querySelector("#libraryList")!;
   const librarySearch = app.querySelector<HTMLInputElement>("#librarySearch")!;
   const libraryPager = app.querySelector<HTMLElement>("#libraryPager")!;
   const libraryPageInfo = app.querySelector("#libraryPageInfo")!;
   const libraryPrev = app.querySelector<HTMLButtonElement>("#libraryPrev")!;
   const libraryNext = app.querySelector<HTMLButtonElement>("#libraryNext")!;
+  const sidebarFpShort = app.querySelector("#sidebarFpShort")!;
+  const viewPanels = app.querySelectorAll<HTMLElement>(".view-panel");
+  const dashTabs = app.querySelectorAll<HTMLButtonElement>(".dash-tab[data-view]");
+
+  function showView(view: string) {
+    for (const btn of dashTabs) {
+      const v = btn.getAttribute("data-view");
+      const on = v === view;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    }
+    for (const panel of viewPanels) {
+      const id = panel.id.replace("view-", "");
+      panel.hidden = id !== view;
+    }
+  }
+
+  function navigateToView(view: ViewId, opts?: { replace?: boolean }) {
+    showView(view);
+    applyRouteSeo(view);
+    const path = viewToPath(view);
+    if (opts?.replace) {
+      history.replaceState({ view }, "", path);
+    } else {
+      history.pushState({ view }, "", path);
+    }
+  }
+
+  function syncViewFromUrl() {
+    const path = normalizePathname(window.location.pathname);
+    if (path === "/") {
+      history.replaceState(
+        { view: "chats" },
+        "",
+        "/chats" + window.location.search + window.location.hash,
+      );
+      showView("chats");
+      applyRouteSeo("chats");
+      return;
+    }
+    const v = pathnameToView(path);
+    if (!v) {
+      history.replaceState({ view: "chats" }, "", "/chats");
+      showView("chats");
+      applyRouteSeo("chats");
+      return;
+    }
+    showView(v);
+    applyRouteSeo(v);
+  }
+
+  function initRoute() {
+    syncViewFromUrl();
+  }
+
+  for (const btn of dashTabs) {
+    btn.addEventListener("click", () => {
+      const v = btn.getAttribute("data-view");
+      if (v && VIEW_IDS.includes(v as ViewId)) navigateToView(v as ViewId);
+    });
+  }
+
+  window.addEventListener("popstate", () => syncViewFromUrl());
+
+  initRoute();
+
+  const brandLink = app.querySelector<HTMLAnchorElement>("a.brand-name");
+  if (brandLink) {
+    brandLink.addEventListener("click", (ev) => {
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      ev.preventDefault();
+      navigateToView("chats");
+    });
+  }
 
   serverUrlEl.value = getServerUrl();
   fpShortEl.textContent = shortFingerprint(fingerprint);
+  sidebarFpShort.textContent = shortFingerprint(fingerprint);
   fpFullEl.textContent = fingerprint;
-  pubKeyB64.textContent = b64encode(pair.publicKey);
+  const pubB64 = b64encode(pair.publicKey);
+  pubKeyB64.value = pubB64;
+  publicKeyShareInput.value = pubB64;
   privKeyB64.textContent = b64encode(pair.secretKey);
 
   let openChatIds: string[] = loadOpenChats();
   let activeChatFp: string | null =
     openChatIds.length > 0 ? openChatIds[0]! : null;
+
+  function openChatWithFingerprint(raw: string): boolean {
+    const fp = normalizeFingerprint(raw.trim());
+    if (!fp) return false;
+    if (!openChatIds.includes(fp)) {
+      openChatIds.push(fp);
+      saveOpenChats(openChatIds);
+    }
+    activeChatFp = fp;
+    renderChatTabs();
+    renderActiveThread();
+    return true;
+  }
+
+  function buildInviteLink(): string {
+    const u = new URL(`${window.location.origin}/chats`);
+    u.searchParams.set("chat", fingerprint);
+    const api = apiBase();
+    const pageOrigin = window.location.origin.replace(/\/$/, "");
+    if (api !== pageOrigin) {
+      u.searchParams.set("server", api);
+    }
+    return u.toString();
+  }
+
+  function updateInviteLinkDisplay() {
+    const url = buildInviteLink();
+    inviteLinkInput.value = url;
+  }
+
+  function stripInviteParamsFromUrl() {
+    const u = new URL(window.location.href);
+    u.searchParams.delete("chat");
+    u.searchParams.delete("fp");
+    u.searchParams.delete("server");
+    const next = u.pathname + (u.search ? u.search : "") + u.hash;
+    history.replaceState({}, "", next);
+  }
+
+  async function applyInviteFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const chatRaw = (params.get("chat") ?? params.get("fp"))?.trim() ?? "";
+    const serverRaw = params.get("server")?.trim() ?? "";
+    if (!chatRaw && !serverRaw) return;
+
+    if (serverRaw) {
+      const next = parseHttpUrlOrNull(serverRaw);
+      if (!next) {
+        openChatStatus.textContent = "Invalid server URL in invite link.";
+        openChatStatus.className = "status err";
+        navigateToView("chats", { replace: true });
+        stripInviteParamsFromUrl();
+        return;
+      }
+      const cur = getServerUrl().replace(/\/$/, "");
+      if (next !== cur) {
+        setServerUrl(next);
+        localStorage.removeItem(LS_TOKEN);
+        await runSessionSetup({ resetLibrary: true });
+      }
+    }
+
+    if (chatRaw) {
+      const ok = openChatWithFingerprint(chatRaw);
+      if (!ok) {
+        openChatStatus.textContent =
+          "Invalid fingerprint in invite link (need 64 hex characters).";
+        openChatStatus.className = "status err";
+      }
+      navigateToView("chats", { replace: true });
+    }
+
+    stripInviteParamsFromUrl();
+  }
 
   void renderContactQrs();
 
@@ -722,7 +1102,7 @@ async function main() {
     for (const s of sent) {
       lines.push({ kind: "out", ts: s.ts, text: s.text });
     }
-    lines.sort((a, b) => a.ts - b.ts);
+    lines.sort((a, b) => b.ts - a.ts);
     chatMessages.innerHTML = "";
     for (const L of lines) {
       const row = document.createElement("div");
@@ -733,7 +1113,7 @@ async function main() {
       )}</div>`;
       chatMessages.appendChild(row);
     }
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatMessages.scrollTop = 0;
   }
 
   syncTabsAfterBackfill = () => {
@@ -925,11 +1305,13 @@ async function main() {
     setServerUrl(next);
     serverStatus.textContent = "";
     await runSessionSetup({ resetLibrary: true });
+    updateInviteLinkDisplay();
   });
 
   registerBtn.addEventListener("click", async () => {
     localStorage.removeItem(LS_TOKEN);
     await runSessionSetup({ resetLibrary: true });
+    updateInviteLinkDisplay();
   });
 
   newKeys.addEventListener("click", () => {
@@ -945,20 +1327,14 @@ async function main() {
   function openChatFromInput() {
     openChatStatus.textContent = "";
     openChatStatus.className = "status";
-    const fp = normalizeFingerprint(openChatFpEl.value);
-    if (!fp) {
-      openChatStatus.textContent = "Enter a valid 64-character hex fingerprint.";
+    const ok = openChatWithFingerprint(openChatFpEl.value);
+    if (!ok) {
+      openChatStatus.textContent =
+        "Enter a valid public key fingerprint (64 hex characters).";
       openChatStatus.className = "status err";
       return;
     }
-    if (!openChatIds.includes(fp)) {
-      openChatIds.push(fp);
-      saveOpenChats(openChatIds);
-    }
-    activeChatFp = fp;
     openChatFpEl.value = "";
-    renderChatTabs();
-    renderActiveThread();
   }
 
   openChatBtn.addEventListener("click", openChatFromInput);
@@ -968,6 +1344,8 @@ async function main() {
       openChatFromInput();
     }
   });
+
+  updateInviteLinkDisplay();
 
   chatSend.addEventListener("click", async () => {
     chatSendStatus.textContent = "";
@@ -1003,6 +1381,8 @@ async function main() {
   renderActiveThread();
   renderLibrary();
   await runSessionSetup({ resetLibrary: false });
+  await applyInviteFromUrl();
+  updateInviteLinkDisplay();
   window.setInterval(() => void refreshLibrary(), 30000);
   window.setInterval(() => void refreshServerStats(), 60000);
 }
