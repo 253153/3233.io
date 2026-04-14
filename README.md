@@ -13,6 +13,7 @@ End-to-end encrypted chat over a minimal **relay** server. Clients generate **Na
 - [Quick start (Docker)](#quick-start-docker)
 - [Development](#development)
 - [Production build](#production-build)
+- [Hosting on Debian with nginx (VPS)](#hosting-on-debian-with-nginx-vps)
 - [Configuration](#configuration)
 - [Cryptography](#cryptography)
 - [Client behavior notes](#client-behavior-notes)
@@ -129,6 +130,170 @@ npm run build
 Output is under `client/dist/`. Point the server’s `STATIC_DIR` at that directory (or serve the folder with any static host and configure CORS / same-origin as needed).
 
 **Server:** `cd server && cargo build --release` — binary in `server/target/release/` (see `Dockerfile` for a minimal container layout).
+
+---
+
+## Hosting on Debian with nginx (VPS)
+
+These steps fit a **fresh Debian 12+** cloud VM (e.g. [Linode](https://www.linode.com/), [Vultr](https://www.vultr.com/), [DigitalOcean](https://www.digitalocean.com/)): install the app behind **nginx**, optionally with **TLS** and a **custom domain**.
+
+### With vs without a custom domain
+
+| Setup | How users reach you | TLS (HTTPS / WSS) |
+|--------|---------------------|-------------------|
+| **Custom domain** | `https://chat.example.com` | Use **Let’s Encrypt** (recommended). |
+| **No domain** | `http://YOUR_PUBLIC_IP` (and paths like `/chats`) | **HTTP only** from browsers. Let’s Encrypt does not issue certs for raw IPs; encrypting traffic requires a domain (or a private CA users trust). |
+
+For production, **use a domain** so sessions use HTTPS/WSS and the UI’s invite links match what you publish.
+
+### 1. Point DNS (domain only)
+
+In your DNS provider, create an **A** record:
+
+- **Name:** e.g. `chat` (→ `chat.example.com`) or `@` for the apex.
+- **Value:** your VPS **public IPv4**.
+
+(Optional) **AAAA** to the same host if you use IPv6. Wait until the record resolves before running Certbot.
+
+### 2. First login and base packages
+
+SSH in as `root` or a sudo user:
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y nginx git ufw curl
+```
+
+### 3. Firewall
+
+Allow SSH, HTTP, and HTTPS:
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+```
+
+Confirm your SSH session still works before disconnecting.
+
+### 4. Install Docker Engine + Compose
+
+Follow the official guide: **[Install Docker Engine on Debian](https://docs.docker.com/engine/install/debian/)** (add Docker’s `apt` repository, then install `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`).
+
+Quick check:
+
+```bash
+sudo docker run --rm hello-world
+docker compose version
+```
+
+Add your user to the `docker` group if you want to run Compose without `sudo` (log out and back in):
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+### 5. Deploy the application
+
+```bash
+sudo mkdir -p /opt/3233.io
+sudo chown "$USER:$USER" /opt/3233.io
+cd /opt/3233.io
+git clone https://github.com/253153/3233.io.git .
+```
+
+Create a strong secret and an environment file (Compose reads `.env` automatically):
+
+```bash
+openssl rand -hex 32 > /tmp/jwt.secret
+# Keep this file only on the server; do not commit it.
+printf 'JWT_SECRET=%s\n' "$(cat /tmp/jwt.secret)" > .env
+rm /tmp/jwt.secret
+```
+
+**Bind the app to localhost** so only nginx can reach it (not the public internet on port 3233). Create `docker-compose.override.yml` next to `docker-compose.yml`:
+
+```yaml
+services:
+  io3233:
+    ports:
+      - "127.0.0.1:3233:3233"
+```
+
+Build and start:
+
+```bash
+docker compose up -d --build
+curl -sS http://127.0.0.1:3233/v1/stats | head -c 200 && echo
+```
+
+SQLite data lives in the Docker volume from the default compose file (`io3233-data`).
+
+### 6. nginx reverse proxy
+
+Put this in `/etc/nginx/sites-available/3233.io` (replace `chat.example.com` with your hostname, or see below for IP-only):
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name chat.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3233;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 86400;
+    }
+}
+```
+
+**No custom domain:** use your server’s IP and a catch-all `server_name`:
+
+```nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    # same location / { ... } block as above
+}
+```
+
+Enable the site and reload nginx:
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/3233.io /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Open `http://chat.example.com` or `http://YOUR_IP` — you should get the web UI.
+
+### 7. TLS with Let’s Encrypt (domain only)
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d chat.example.com
+```
+
+Certbot edits nginx for HTTPS and schedules renewal (`certbot renew`). Use **`https://`** and **`wss://`** in production so traffic between browsers and your VPS is encrypted.
+
+### 8. Operations notes
+
+- **Updates:** `cd /opt/3233.io && git pull && docker compose up -d --build`
+- **JWT_SECRET:** Changing it invalidates existing sessions; users re-register in the UI.
+- **Backups:** Persist the Docker volume (or the SQLite files under it) and keep `.env` secret.
+- If anything fails, check `docker compose logs` and `sudo journalctl -u nginx`.
 
 ---
 

@@ -841,6 +841,13 @@ async function main() {
             <p class="about-lead">
               The project is <strong>open source</strong> (MIT). You are not asked to trust a black box.
             </p>
+            <p class="about-lead about-source-link">
+              <a
+                href="https://github.com/253153/3233.io"
+                target="_blank"
+                rel="noopener noreferrer"
+              >Source code on GitHub</a> — server, client, and protocol docs.
+            </p>
             <ul class="about-list">
               <li>
                 <strong>Auditable client.</strong> All cryptography runs in this page’s JavaScript — read <span class="mono-inline">client/src/crypto.ts</span> and follow the data path from compose → encrypt → network. Build the same bundle and compare hashes if you want hard verification.
@@ -862,7 +869,14 @@ async function main() {
         <span id="liveIndicator" class="live-badge connecting">Connecting…</span>
         <span class="live-hint" id="liveHint"></span>
       </div>
-      <p class="footer-meta">v0.1.0 · Made with ☕ + ♥️ · © 2026 3233.io</p>
+      <p class="footer-meta">
+        v0.1.0 · Made with ☕ + ❤️ · © 2026 3233.io ·
+        <a
+          href="https://github.com/253153/3233.io"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Source</a>
+      </p>
     </footer>
   `;
 

@@ -378,6 +378,14 @@ button.site-header-btn {
   text-align: right;
 }
 
+.footer-meta a {
+  color: var(--muted);
+}
+
+.footer-meta a:hover {
+  color: var(--accent);
+}
+
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
