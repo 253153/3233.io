@@ -1,8 +1,35 @@
-server/target
-node_modules
-client/node_modules
-client/dist
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Build output
+client/dist/
+**/target/
+
+# SQLite / local DB
 *.db
 *.db-*
+
+# Environment & secrets
 .env
+.env.*
+!.env.example
+
+# OS / editor
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Coverage / tooling
+coverage/
+.nyc_output/
+*.profraw

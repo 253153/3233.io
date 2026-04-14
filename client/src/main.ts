@@ -17,6 +17,7 @@ const LS_PK = "io3233_public_key";
 const LS_TOKEN = "io3233_token";
 const LS_OPEN_CHATS = "io3233_open_chats";
 const LS_SENT = "io3233_sent_by_contact_v1";
+const LS_LAST_READ = "io3233_last_read_msg_id_by_fp_v1";
 
 type SentLine = { ts: number; text: string };
 
@@ -47,6 +48,24 @@ function normalizeFingerprint(raw: string): string | null {
   return s;
 }
 
+/** NaCl box public key length (Curve25519), bytes */
+const BOX_PK_BYTES = 32;
+
+/** Fingerprint (64 hex) or derive it from a base64-encoded box public key. */
+async function resolveRecipientFingerprint(raw: string): Promise<string | null> {
+  const compact = raw.trim().replace(/\s+/g, "");
+  if (!compact) return null;
+  const hex = normalizeFingerprint(compact);
+  if (hex) return hex;
+  try {
+    const pk = b64decode(compact);
+    if (pk.length !== BOX_PK_BYTES) return null;
+    return await fingerprintFromPublicKey(pk);
+  } catch {
+    return null;
+  }
+}
+
 /** Absolute http(s) API base, or null */
 function parseHttpUrlOrNull(raw: string): string | null {
   const t = raw.trim();
@@ -60,7 +79,7 @@ function parseHttpUrlOrNull(raw: string): string | null {
   }
 }
 
-const VIEW_IDS = ["chats", "server", "keys", "library", "about"] as const;
+const VIEW_IDS = ["newchat", "chats", "server", "keys", "library", "about"] as const;
 type ViewId = (typeof VIEW_IDS)[number];
 
 function normalizePathname(pathname: string): string {
@@ -81,10 +100,15 @@ function viewToPath(view: string): string {
 }
 
 const ROUTE_SEO: Record<ViewId, { title: string; description: string }> = {
+  newchat: {
+    title: "New chat — 3233.io · ~/encrypted relay",
+    description:
+      "Your invite link and public key on this relay. Share them so others can open a chat with you or encrypt to you. Keys stay in your browser.",
+  },
   chats: {
     title: "Chats — 3233.io · ~/encrypted relay",
     description:
-      "End-to-end encrypted chats. Paste a contact’s public key fingerprint, share your invite link, or wait for inbound mail. Keys stay in your browser.",
+      "Read and send end-to-end encrypted messages. Pick a thread in the sidebar or add a contact from New chat.",
   },
   server: {
     title: "Server — 3233.io · ~/encrypted relay",
@@ -138,6 +162,30 @@ function setCanonicalLink(href: string) {
   el.setAttribute("href", href);
 }
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function applyRouteSeo(view: ViewId) {
   const seo = ROUTE_SEO[view];
   document.title = seo.title;
@@ -185,6 +233,27 @@ function loadSentMap(): Record<string, SentLine[]> {
 
 function saveSentMap(m: Record<string, SentLine[]>) {
   localStorage.setItem(LS_SENT, JSON.stringify(m));
+}
+
+function loadLastReadMap(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(LS_LAST_READ);
+    if (!raw) return {};
+    const j = JSON.parse(raw) as Record<string, number>;
+    if (!j || typeof j !== "object") return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(j)) {
+      const fp = normalizeFingerprint(k);
+      if (fp && typeof v === "number" && Number.isFinite(v)) out[fp] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveLastReadMap(m: Record<string, number>) {
+  localStorage.setItem(LS_LAST_READ, JSON.stringify(m));
 }
 
 function appendSent(toFp: string, text: string) {
@@ -553,40 +622,37 @@ async function main() {
   app.innerHTML = `
     <header class="site-header">
       <div class="site-brand">
-        <a href="/chats" class="brand-name"><b>3233</b></a>
+        <a href="/newchat" class="brand-name"><b>3233</b></a>
         <span class="brand-path">~/encrypted relay</span>
+      </div>
+      <div class="site-header-actions" role="toolbar" aria-label="Quick actions">
+        <button type="button" class="secondary site-header-btn" id="headerNewKeys">New keys</button>
+        <button type="button" class="secondary site-header-btn" id="headerCopyInvite">Copy invite link</button>
+        <button type="button" class="secondary site-header-btn" id="headerCopyAddress">Copy address</button>
       </div>
     </header>
 
     <div class="app-shell">
       <aside class="app-sidebar" aria-label="Sidebar">
-        <details class="sidebar-block sidebar-chats" open>
-          <summary class="sidebar-summary">Chats»</summary>
-          <div class="sidebar-chats-inner">
-            <p class="sidebar-kv sidebar-kv--you">
-              <span class="sidebar-k">fp</span>
-              <span id="sidebarFpShort" class="mono"></span>
-            </p>
-            <p class="sidebar-session-hint">E2E · server never sees plaintext</p>
-            <div class="sidebar-chat-tabs-wrap">
-              <div id="chatTabs" class="chat-tabs chat-tabs--sidebar"></div>
-            </div>
-          </div>
-        </details>
-      </aside>
-
-      <main class="app-main">
-        <nav class="dashboard-tabs" role="tablist" aria-label="Main views">
-          <button type="button" role="tab" class="dash-tab active" data-view="chats" aria-selected="true" id="tab-chats">chats</button>
+        <nav class="dashboard-tabs sidebar-main-nav" role="tablist" aria-label="Main views">
+          <button type="button" role="tab" class="dash-tab active" data-view="newchat" aria-selected="true" id="tab-newchat">new chat</button>
+          <button type="button" role="tab" class="dash-tab" data-view="chats" aria-selected="false" id="tab-chats">chats</button>
           <button type="button" role="tab" class="dash-tab" data-view="server" aria-selected="false" id="tab-server">server</button>
           <button type="button" role="tab" class="dash-tab" data-view="keys" aria-selected="false" id="tab-keys">keys</button>
           <button type="button" role="tab" class="dash-tab" data-view="library" aria-selected="false" id="tab-library">library</button>
           <button type="button" role="tab" class="dash-tab" data-view="about" aria-selected="false" id="tab-about">about</button>
         </nav>
+        <section class="sidebar-chats-panel" aria-label="Threads">
+          <div class="sidebar-chat-tabs-wrap">
+            <div id="chatTabs" class="chat-tabs chat-tabs--sidebar"></div>
+          </div>
+        </section>
+      </aside>
 
-        <section id="view-chats" class="view-panel" role="tabpanel" aria-labelledby="tab-chats">
+      <main class="app-main">
+        <section id="view-newchat" class="view-panel" role="tabpanel" aria-labelledby="tab-newchat">
           <p class="key-intro chat-intro">
-            New messages open a thread in the sidebar. To start a chat, paste the other person’s <strong>public key fingerprint</strong> (64 hex characters — the address they share).
+            <strong>New chat</strong> — copy your invite link or public key so others can reach you. To start a conversation, paste someone else’s fingerprint or public key and <strong>Open chat</strong>, then go to the <strong>chats</strong> tab to read and send messages.
           </p>
           <div class="invite-link-block">
             <p class="invite-link-hint">
@@ -619,24 +685,30 @@ async function main() {
           </div>
           <div class="row">
             <div style="flex:2 1 220px">
-              <label for="openChatFp">Their public key (fingerprint, 64 hex)</label>
+              <label for="openChatFp">Their fingerprint (64 hex) or public key (base64)</label>
               <input
                 type="text"
                 id="openChatFp"
-                placeholder="Paste the contact’s public key fingerprint…"
+                placeholder="Paste fingerprint or base64 public key…"
                 autocomplete="off"
               />
             </div>
             <button type="button" id="openChatBtn">Open chat</button>
           </div>
           <p class="status" id="openChatStatus"></p>
-          <p class="status chat-empty-hint" id="chatEmptyHint">No thread — add someone’s public key above, share your invite link or public key from the fields above, or wait for inbound mail.</p>
+        </section>
+
+        <section id="view-chats" class="view-panel" role="tabpanel" aria-labelledby="tab-chats" hidden>
+          <p class="key-intro chat-intro chat-intro--chats">
+            Select a thread in the sidebar, or add someone from <strong>new chat</strong>.
+          </p>
+          <p class="status chat-empty-hint" id="chatEmptyHint">No thread — use <strong>new chat</strong> to open a conversation, or select a thread in the sidebar.</p>
           <div class="chat-thread" id="chatThread" hidden>
             <div class="chat-with-block">
               <div class="chat-with-label">Contact — their public key fingerprint</div>
               <p class="chat-thread-id mono" id="chatThreadHead"></p>
               <p class="chat-thread-hint">
-                This is the person you’re messaging (recipient), not your own key. Your fingerprint is under <strong>Chats»</strong> in the sidebar.
+                This is the person you’re messaging (recipient), not your own key. Your fingerprint is on the <strong>keys</strong> tab.
               </p>
             </div>
             <div class="chat-composer">
@@ -749,6 +821,9 @@ async function main() {
             <p class="about-lead">
               This app is built for <strong>end-to-end encryption</strong>: only you and your contact can read message content.
             </p>
+            <p class="about-lead">
+              <strong>Encryption protocol:</strong> <span class="mono-inline">NaCl box</span> (Daniel J. Bernstein’s public-key “box” construction) — <span class="mono-inline">Curve25519</span> / X25519 for Diffie–Hellman and <span class="mono-inline">XSalsa20-Poly1305</span> for authenticated encryption. The browser uses the <span class="mono-inline">tweetnacl</span> implementation.
+            </p>
             <ul class="about-list">
               <li>
                 <strong>Keys stay in your browser.</strong> Your secret key never leaves this device unless you explicitly export it. The relay never receives it.
@@ -809,6 +884,9 @@ async function main() {
   const regStatus = app.querySelector<HTMLElement>("#regStatus")!;
   const registerBtn = app.querySelector("#registerBtn")!;
   const newKeys = app.querySelector("#newKeys")!;
+  const headerCopyInvite = app.querySelector<HTMLButtonElement>("#headerCopyInvite")!;
+  const headerCopyAddress = app.querySelector<HTMLButtonElement>("#headerCopyAddress")!;
+  const headerNewKeys = app.querySelector<HTMLButtonElement>("#headerNewKeys")!;
   const inviteLinkInput = app.querySelector<HTMLInputElement>("#inviteLinkInput")!;
   const publicKeyShareInput = app.querySelector<HTMLInputElement>("#publicKeyShareInput")!;
   const openChatFpEl = app.querySelector<HTMLInputElement>("#openChatFp")!;
@@ -828,9 +906,73 @@ async function main() {
   const libraryPageInfo = app.querySelector("#libraryPageInfo")!;
   const libraryPrev = app.querySelector<HTMLButtonElement>("#libraryPrev")!;
   const libraryNext = app.querySelector<HTMLButtonElement>("#libraryNext")!;
-  const sidebarFpShort = app.querySelector("#sidebarFpShort")!;
   const viewPanels = app.querySelectorAll<HTMLElement>(".view-panel");
   const dashTabs = app.querySelectorAll<HTMLButtonElement>(".dash-tab[data-view]");
+  let incomingAudioCtx: AudioContext | null = null;
+  let incomingAudioUnlocked = false;
+
+  /** Must run from a user gesture: browsers start AudioContext suspended if created later (e.g. after fetch). */
+  function unlockIncomingAudio() {
+    try {
+      const Ctx =
+        window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) {
+        incomingAudioUnlocked = true;
+        return;
+      }
+      incomingAudioCtx ??= new Ctx();
+      const ctx = incomingAudioCtx;
+      if (ctx.state === "suspended") {
+        void ctx.resume();
+      }
+      // Inaudible blip during gesture — keeps some WebKit builds from blocking later oscillators.
+      const t0 = ctx.currentTime;
+      const silent = ctx.createOscillator();
+      const g0 = ctx.createGain();
+      g0.gain.setValueAtTime(0, t0);
+      silent.connect(g0);
+      g0.connect(ctx.destination);
+      silent.start(t0);
+      silent.stop(t0 + 0.001);
+      incomingAudioUnlocked = true;
+    } catch {
+      incomingAudioUnlocked = true;
+    }
+  }
+
+  function installIncomingAudioUnlock() {
+    const onGesture = () => unlockIncomingAudio();
+    window.addEventListener("pointerdown", onGesture, { passive: true });
+    window.addEventListener("keydown", onGesture);
+    window.addEventListener("touchstart", onGesture, { passive: true });
+  }
+
+  function playIncomingMessageSound() {
+    if (!incomingAudioUnlocked) return;
+    try {
+      const ctx = incomingAudioCtx;
+      if (!ctx) return;
+      if (ctx.state === "suspended") {
+        void ctx.resume();
+      }
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(920, now);
+      osc.frequency.exponentialRampToValueAtTime(1240, now + 0.1);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.14, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.16);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function showView(view: string) {
     for (const btn of dashTabs) {
@@ -854,29 +996,43 @@ async function main() {
     } else {
       history.pushState({ view }, "", path);
     }
+    if (view === "chats") {
+      renderChatTabs();
+      renderActiveThread();
+    }
   }
 
   function syncViewFromUrl() {
     const path = normalizePathname(window.location.pathname);
+    let v: ViewId;
     if (path === "/") {
       history.replaceState(
-        { view: "chats" },
+        { view: "newchat" },
         "",
-        "/chats" + window.location.search + window.location.hash,
+        "/newchat" + window.location.search + window.location.hash,
       );
-      showView("chats");
-      applyRouteSeo("chats");
-      return;
+      v = "newchat";
+      showView(v);
+      applyRouteSeo(v);
+    } else {
+      const parsed = pathnameToView(path);
+      if (!parsed) {
+        history.replaceState({ view: "newchat" }, "", "/newchat");
+        v = "newchat";
+        showView(v);
+        applyRouteSeo(v);
+      } else {
+        v = parsed;
+        showView(v);
+        applyRouteSeo(v);
+      }
     }
-    const v = pathnameToView(path);
-    if (!v) {
-      history.replaceState({ view: "chats" }, "", "/chats");
-      showView("chats");
-      applyRouteSeo("chats");
-      return;
+    if (v === "chats") {
+      window.setTimeout(() => {
+        renderChatTabs();
+        renderActiveThread();
+      }, 0);
     }
-    showView(v);
-    applyRouteSeo(v);
   }
 
   function initRoute() {
@@ -893,19 +1049,19 @@ async function main() {
   window.addEventListener("popstate", () => syncViewFromUrl());
 
   initRoute();
+  installIncomingAudioUnlock();
 
   const brandLink = app.querySelector<HTMLAnchorElement>("a.brand-name");
   if (brandLink) {
     brandLink.addEventListener("click", (ev) => {
       if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
       ev.preventDefault();
-      navigateToView("chats");
+      navigateToView("newchat");
     });
   }
 
   serverUrlEl.value = getServerUrl();
   fpShortEl.textContent = shortFingerprint(fingerprint);
-  sidebarFpShort.textContent = shortFingerprint(fingerprint);
   fpFullEl.textContent = fingerprint;
   const pubB64 = b64encode(pair.publicKey);
   pubKeyB64.value = pubB64;
@@ -915,9 +1071,45 @@ async function main() {
   let openChatIds: string[] = loadOpenChats();
   let activeChatFp: string | null =
     openChatIds.length > 0 ? openChatIds[0]! : null;
+  let lastReadByFp: Record<string, number> = loadLastReadMap();
 
-  function openChatWithFingerprint(raw: string): boolean {
-    const fp = normalizeFingerprint(raw.trim());
+  function ensureLastReadBaselines() {
+    const maxBy = new Map<string, number>();
+    for (const e of libraryEntries) {
+      if (!e.senderFp) continue;
+      const fp = e.senderFp;
+      maxBy.set(fp, Math.max(maxBy.get(fp) ?? 0, e.id));
+    }
+    let changed = false;
+    for (const [fp, maxId] of maxBy) {
+      if (lastReadByFp[fp] === undefined) {
+        lastReadByFp[fp] = maxId;
+        changed = true;
+      }
+    }
+    if (changed) saveLastReadMap(lastReadByFp);
+  }
+
+  function markThreadRead(fp: string) {
+    let maxId = 0;
+    for (const e of libraryEntries) {
+      if (e.senderFp === fp) maxId = Math.max(maxId, e.id);
+    }
+    if (lastReadByFp[fp] === maxId) return;
+    lastReadByFp[fp] = maxId;
+    saveLastReadMap(lastReadByFp);
+  }
+
+  function threadHasUnread(fp: string): boolean {
+    const lr = lastReadByFp[fp] ?? 0;
+    for (const e of libraryEntries) {
+      if (e.senderFp === fp && e.id > lr) return true;
+    }
+    return false;
+  }
+
+  async function openChatWithFingerprint(raw: string): Promise<boolean> {
+    const fp = await resolveRecipientFingerprint(raw);
     if (!fp) return false;
     if (!openChatIds.includes(fp)) {
       openChatIds.push(fp);
@@ -945,6 +1137,14 @@ async function main() {
     inviteLinkInput.value = url;
   }
 
+  function flashButtonLabel(btn: HTMLButtonElement, doneLabel: string, ms = 1000) {
+    const prev = btn.textContent ?? "";
+    btn.textContent = doneLabel;
+    window.setTimeout(() => {
+      btn.textContent = prev;
+    }, ms);
+  }
+
   function stripInviteParamsFromUrl() {
     const u = new URL(window.location.href);
     u.searchParams.delete("chat");
@@ -965,7 +1165,7 @@ async function main() {
       if (!next) {
         openChatStatus.textContent = "Invalid server URL in invite link.";
         openChatStatus.className = "status err";
-        navigateToView("chats", { replace: true });
+        navigateToView("newchat", { replace: true });
         stripInviteParamsFromUrl();
         return;
       }
@@ -978,13 +1178,15 @@ async function main() {
     }
 
     if (chatRaw) {
-      const ok = openChatWithFingerprint(chatRaw);
+      const ok = await openChatWithFingerprint(chatRaw);
       if (!ok) {
         openChatStatus.textContent =
-          "Invalid fingerprint in invite link (need 64 hex characters).";
+          "Invalid contact in invite link (need 64 hex fingerprint or base64 public key).";
         openChatStatus.className = "status err";
+        navigateToView("newchat", { replace: true });
+      } else {
+        navigateToView("chats", { replace: true });
       }
-      navigateToView("chats", { replace: true });
     }
 
     stripInviteParamsFromUrl();
@@ -1049,6 +1251,7 @@ async function main() {
   }
 
   function renderChatTabs() {
+    ensureLastReadBaselines();
     chatTabsEl.innerHTML = "";
     for (const fp of openChatIds) {
       const wrap = document.createElement("div");
@@ -1056,12 +1259,24 @@ async function main() {
       const label = document.createElement("button");
       label.type = "button";
       label.className = "chat-tab-label";
-      label.textContent = shortFingerprint(fp);
+      const unread = threadHasUnread(fp);
+      if (unread) {
+        const dot = document.createElement("span");
+        dot.className = "chat-tab-unread-dot";
+        dot.title = "Unread messages";
+        label.appendChild(dot);
+      }
+      label.appendChild(document.createTextNode(shortFingerprint(fp)));
       label.title = fp;
+      label.setAttribute(
+        "aria-label",
+        unread ? `${shortFingerprint(fp)}, unread messages` : shortFingerprint(fp),
+      );
       label.addEventListener("click", () => {
         activeChatFp = fp;
         renderChatTabs();
         renderActiveThread();
+        navigateToView("chats");
       });
       const close = document.createElement("button");
       close.type = "button";
@@ -1089,6 +1304,10 @@ async function main() {
       chatThread.hidden = true;
       chatEmptyHint.hidden = false;
       return;
+    }
+    const chatsPanel = app.querySelector("#view-chats") as HTMLElement | null;
+    if (chatsPanel && !chatsPanel.hidden) {
+      markThreadRead(activeChatFp);
     }
     chatEmptyHint.hidden = true;
     chatThread.hidden = false;
@@ -1137,13 +1356,13 @@ async function main() {
   };
 
   onNewPolledEntry = (entry) => {
+    playIncomingMessageSound();
     const fp = entry.senderFp;
     if (!fp) return;
     if (!openChatIds.includes(fp)) {
       openChatIds.push(fp);
       saveOpenChats(openChatIds);
     }
-    activeChatFp = fp;
     renderChatTabs();
     renderActiveThread();
   };
@@ -1156,6 +1375,8 @@ async function main() {
     libraryPage = 1;
     librarySearchQuery = "";
     librarySearch.value = "";
+    lastReadByFp = {};
+    saveLastReadMap(lastReadByFp);
   }
 
   async function refreshServerStats() {
@@ -1314,34 +1535,55 @@ async function main() {
     updateInviteLinkDisplay();
   });
 
-  newKeys.addEventListener("click", () => {
+  function runNewKeysReset() {
     if (!confirm("Generate new keys? This cannot be undone.")) return;
     localStorage.removeItem(LS_SK);
     localStorage.removeItem(LS_PK);
     localStorage.removeItem(LS_TOKEN);
     localStorage.removeItem(LS_OPEN_CHATS);
     localStorage.removeItem(LS_SENT);
+    localStorage.removeItem(LS_LAST_READ);
     location.reload();
+  }
+
+  newKeys.addEventListener("click", runNewKeysReset);
+  headerNewKeys.addEventListener("click", runNewKeysReset);
+
+  headerCopyInvite.addEventListener("click", async () => {
+    updateInviteLinkDisplay();
+    const ok = await copyTextToClipboard(buildInviteLink());
+    if (ok) flashButtonLabel(headerCopyInvite, "Copied");
+    else
+      alert(
+        "Could not copy automatically — open New chat and copy the invite link field, or try again over HTTPS.",
+      );
   });
 
-  function openChatFromInput() {
+  headerCopyAddress.addEventListener("click", async () => {
+    const ok = await copyTextToClipboard(fingerprint);
+    if (ok) flashButtonLabel(headerCopyAddress, "Copied");
+    else alert("Could not copy automatically — try again over HTTPS or copy from the keys tab.");
+  });
+
+  async function openChatFromInput() {
     openChatStatus.textContent = "";
     openChatStatus.className = "status";
-    const ok = openChatWithFingerprint(openChatFpEl.value);
+    const ok = await openChatWithFingerprint(openChatFpEl.value);
     if (!ok) {
       openChatStatus.textContent =
-        "Enter a valid public key fingerprint (64 hex characters).";
+        "Enter a valid fingerprint (64 hex) or NaCl box public key (base64, 32 bytes when decoded).";
       openChatStatus.className = "status err";
       return;
     }
     openChatFpEl.value = "";
+    navigateToView("chats");
   }
 
-  openChatBtn.addEventListener("click", openChatFromInput);
+  openChatBtn.addEventListener("click", () => void openChatFromInput());
   openChatFpEl.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") {
       ev.preventDefault();
-      openChatFromInput();
+      void openChatFromInput();
     }
   });
 
