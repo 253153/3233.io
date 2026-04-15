@@ -117,6 +117,10 @@ fn is_hex_fingerprint(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+fn is_hex_prefix(s: &str) -> bool {
+    s.len() >= 8 && s.len() <= 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn decode_base64_32(data: &str) -> Result<Vec<u8>, ()> {
     decode_base64_len(data, 32)
 }
@@ -404,6 +408,26 @@ async fn get_public_key(
     })))
 }
 
+async fn search_keys(
+    State(state): State<AppState>,
+    Path(prefix): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let prefix = prefix.to_lowercase();
+    if !is_hex_prefix(&prefix) {
+        return Err((StatusCode::BAD_REQUEST, "invalid prefix (8–64 hex chars)".to_string()));
+    }
+    let like_pattern = format!("{}%", prefix);
+    let rows = sqlx::query_as::<_, (String,)>(
+        "SELECT fingerprint FROM users WHERE fingerprint LIKE ? LIMIT 10",
+    )
+    .bind(&like_pattern)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(internal)?;
+    let fingerprints: Vec<&str> = rows.iter().map(|(fp,)| fp.as_str()).collect();
+    Ok(Json(serde_json::json!({ "fingerprints": fingerprints })))
+}
+
 async fn get_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&state.pool)
@@ -584,6 +608,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/me", get(get_me))
         .route("/v1/stats", get(get_stats))
         .route("/v1/keys/{fingerprint}", get(get_public_key))
+        .route("/v1/keys/search/{prefix}", get(search_keys))
         .route("/v1/ws", get(ws_handler))
         .layer(
             CorsLayer::new()

@@ -33,3 +33,6 @@ yarn-error.log*
 coverage/
 .nyc_output/
 *.profraw
+
+# Internal docs (never commit)
+MARKETING_PLAN.md

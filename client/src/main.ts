@@ -52,12 +52,38 @@ function normalizeFingerprint(raw: string): string | null {
 /** NaCl box public key length (Curve25519), bytes */
 const BOX_PK_BYTES = 32;
 
-/** Fingerprint (64 hex) or derive it from a base64-encoded box public key. */
+/** Resolve a short/full hex prefix search against the server. */
+async function searchFingerprintByPrefix(prefix: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${apiBase()}/v1/keys/search/${encodeURIComponent(prefix)}`);
+    if (!r.ok) return null;
+    const j = (await r.json()) as { fingerprints: string[] };
+    if (j.fingerprints.length === 1) return j.fingerprints[0]!;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fingerprint (64 hex), short fingerprint (3233:xxxx), or base64 NaCl box public key. */
 async function resolveRecipientFingerprint(raw: string): Promise<string | null> {
-  const compact = raw.trim().replace(/\s+/g, "");
+  let compact = raw.trim().replace(/\s+/g, "");
   if (!compact) return null;
+
+  // Strip 3233: prefix if present
+  if (compact.toLowerCase().startsWith("3233:")) {
+    compact = compact.slice(5);
+  }
+
   const hex = normalizeFingerprint(compact);
   if (hex) return hex;
+
+  // If it looks like a hex prefix (8–63 chars), try a server prefix search
+  const lower = compact.toLowerCase();
+  if (/^[0-9a-f]{8,63}$/.test(lower)) {
+    return searchFingerprintByPrefix(lower);
+  }
+
   try {
     const pk = b64decode(compact);
     if (pk.length !== BOX_PK_BYTES) return null;
@@ -1654,7 +1680,7 @@ async function main() {
     const ok = await openChatWithFingerprint(openChatFpEl.value);
     if (!ok) {
       openChatStatus.textContent =
-        "Enter a valid fingerprint (64 hex) or NaCl box public key (base64, 32 bytes when decoded).";
+        "Enter a valid fingerprint (64 hex), short fingerprint (3233:…), or NaCl box public key (base64). Short fingerprints must match exactly one user.";
       openChatStatus.className = "status err";
       return;
     }
