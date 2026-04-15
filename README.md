@@ -13,6 +13,8 @@ End-to-end encrypted chat over a minimal **relay** server. Clients generate **Na
 - [Quick start (Docker)](#quick-start-docker)
 - [Development](#development)
 - [Production build](#production-build)
+  - [Running without Docker](#running-without-docker)
+  - [Process management](#process-management)
 - [Hosting on Debian with nginx (VPS)](#hosting-on-debian-with-nginx-vps)
 - [Configuration](#configuration)
 - [Cryptography](#cryptography)
@@ -109,11 +111,13 @@ Open the URL Vite prints (often **http://localhost:5173/**). In dev the client d
 | Symptom | What to try |
 |--------|-------------|
 | `npm: command not found` | Install Node.js (LTS); ensure `node` / `npm` on `PATH`. |
+| `cargo: command not found` | Install Rust via [rustup.rs](https://rustup.rs/); restart your shell. |
 | `Could not read package.json` | Run commands from repo **root** or **`client/`**, not `server/`. |
 | `cd: client: No such file or directory` | You are in `server/` — `cd ../client`. |
-| Port **3233** busy | Stop the other process or set `BIND` (see above). |
+| Port **3233** busy | `ss -lptn 'sport = :3233'` to see what holds the port; `fuser -k 3233/tcp` to kill it. |
 | Port **5173** busy | `npm run dev -- --port 5174`. |
 | API errors in browser | Server running; **Base URL** in app matches host/port. |
+| Binary not found after build | The server binary is **`io3233-server`**, not `server`. Find it at `server/target/release/io3233-server`. |
 | LAN / another device | `npm run dev -- --host` and use Vite’s “Network” URL. |
 
 ---
@@ -127,9 +131,90 @@ npm install
 npm run build
 ```
 
-Output is under `client/dist/`. Point the server’s `STATIC_DIR` at that directory (or serve the folder with any static host and configure CORS / same-origin as needed).
+Output is under `client/dist/`. Point the server's `STATIC_DIR` at that directory (or serve the folder with any static host and configure CORS / same-origin as needed).
 
-**Server:** `cd server && cargo build --release` — binary in `server/target/release/` (see `Dockerfile` for a minimal container layout).
+**Server (binary):**
+
+```bash
+cd server
+cargo build --release
+```
+
+The compiled binary is **`server/target/release/io3233-server`** (not `server`). Run it directly:
+
+```bash
+export JWT_SECRET=$(openssl rand -hex 32)
+export STATIC_DIR=/path/to/3233.io/client/dist
+./target/release/io3233-server
+```
+
+### Running without Docker
+
+If Docker is not available, build the client and server from source (requires **Rust** and **Node.js**):
+
+```bash
+# Build client
+cd /path/to/3233.io
+npm install && npm run build
+
+# Build server
+cd server
+cargo build --release
+
+# Run
+export JWT_SECRET=$(openssl rand -hex 32)
+export STATIC_DIR=/path/to/3233.io/client/dist
+export BIND=127.0.0.1:3233
+./target/release/io3233-server
+```
+
+Put this behind **nginx** (see [Hosting on Debian with nginx](#hosting-on-debian-with-nginx-vps)) and optionally manage it with **systemd** (see below).
+
+### Process management
+
+**Check if port 3233 is already in use** before starting:
+
+```bash
+ss -lptn 'sport = :3233'
+```
+
+If something is listening, either stop it or pick a different `BIND` port:
+
+```bash
+# Find and kill the process using port 3233
+fuser -k 3233/tcp
+# Or on systems without fuser:
+kill $(ss -lptn 'sport = :3233' | grep -oP 'pid=\K\d+')
+```
+
+**Optional: systemd unit** for automatic startup and restarts — create `/etc/systemd/system/3233.service`:
+
+```ini
+[Unit]
+Description=3233.io encrypted relay
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/3233.io/server
+ExecStart=/opt/3233.io/server/target/release/io3233-server
+EnvironmentFile=/opt/3233.io/.env
+Environment=BIND=127.0.0.1:3233
+Environment=STATIC_DIR=/opt/3233.io/client/dist
+Environment=DATABASE_URL=sqlite:/opt/3233.io/data/data.db?mode=rwc
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo mkdir -p /opt/3233.io/data
+sudo systemctl daemon-reload
+sudo systemctl enable --now 3233
+sudo systemctl status 3233
+```
 
 ---
 

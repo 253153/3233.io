@@ -194,9 +194,31 @@ function applyRouteSeo(view: ViewId) {
   setMetaByProperty("og:description", seo.description);
   const url = `${window.location.origin}${viewToPath(view)}`;
   setMetaByProperty("og:url", url);
+  const ogImage = `${window.location.origin}/og-image.png`;
+  setMetaByProperty("og:image", ogImage);
+  setMetaByName("twitter:card", "summary_large_image");
   setMetaByName("twitter:title", seo.title);
   setMetaByName("twitter:description", seo.description);
+  setMetaByName("twitter:image", ogImage);
   setCanonicalLink(url);
+}
+
+function applyInviteSeo() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("chat") && !params.has("fp")) return;
+  const title = "Chat securely on 3233.io";
+  const description = "Open this link to start an end-to-end encrypted conversation. Keys stay in your browser.";
+  const ogImage = `${window.location.origin}/og-image.png`;
+  document.title = title;
+  setMetaByName("description", description);
+  setMetaByProperty("og:title", title);
+  setMetaByProperty("og:description", description);
+  setMetaByProperty("og:image", ogImage);
+  setMetaByProperty("og:url", window.location.href);
+  setMetaByName("twitter:card", "summary_large_image");
+  setMetaByName("twitter:title", title);
+  setMetaByName("twitter:description", description);
+  setMetaByName("twitter:image", ogImage);
 }
 
 function loadOpenChats(): string[] {
@@ -699,6 +721,7 @@ async function main() {
         </section>
 
         <section id="view-chats" class="view-panel" role="tabpanel" aria-labelledby="tab-chats" hidden>
+          <div id="mobileChatTabs" class="chat-tabs chat-tabs--mobile"></div>
           <p class="key-intro chat-intro chat-intro--chats">
             Select a thread in the sidebar, or add someone from <strong>new chat</strong>.
           </p>
@@ -906,6 +929,7 @@ async function main() {
   const openChatFpEl = app.querySelector<HTMLInputElement>("#openChatFp")!;
   const openChatBtn = app.querySelector<HTMLButtonElement>("#openChatBtn")!;
   const chatTabsEl = app.querySelector("#chatTabs")!;
+  const mobileChatTabsEl = app.querySelector("#mobileChatTabs")!;
   const chatThread = app.querySelector<HTMLElement>("#chatThread")!;
   const chatThreadHead = app.querySelector("#chatThreadHead")!;
   const chatMessages = app.querySelector("#chatMessages")!;
@@ -1051,6 +1075,7 @@ async function main() {
 
   function initRoute() {
     syncViewFromUrl();
+    applyInviteSeo();
   }
 
   for (const btn of dashTabs) {
@@ -1264,9 +1289,8 @@ async function main() {
     return d.innerHTML;
   }
 
-  function renderChatTabs() {
-    ensureLastReadBaselines();
-    chatTabsEl.innerHTML = "";
+  function buildChatTabNodes(): DocumentFragment {
+    const frag = document.createDocumentFragment();
     for (const fp of openChatIds) {
       const wrap = document.createElement("div");
       wrap.className = "chat-tab" + (fp === activeChatFp ? " active" : "");
@@ -1309,8 +1333,17 @@ async function main() {
       });
       wrap.appendChild(label);
       wrap.appendChild(close);
-      chatTabsEl.appendChild(wrap);
+      frag.appendChild(wrap);
     }
+    return frag;
+  }
+
+  function renderChatTabs() {
+    ensureLastReadBaselines();
+    chatTabsEl.innerHTML = "";
+    mobileChatTabsEl.innerHTML = "";
+    chatTabsEl.appendChild(buildChatTabNodes());
+    mobileChatTabsEl.appendChild(buildChatTabNodes());
   }
 
   function renderActiveThread() {
@@ -1373,9 +1406,14 @@ async function main() {
     playIncomingMessageSound();
     const fp = entry.senderFp;
     if (!fp) return;
-    if (!openChatIds.includes(fp)) {
+    const wasOpen = openChatIds.includes(fp);
+    if (!wasOpen) {
       openChatIds.push(fp);
       saveOpenChats(openChatIds);
+    }
+    if (!wasOpen || activeChatFp !== fp) {
+      activeChatFp = fp;
+      navigateToView("chats");
     }
     renderChatTabs();
     renderActiveThread();
@@ -1647,3 +1685,11 @@ main().catch((e) => {
   console.error(e);
   document.querySelector("#app")!.innerHTML = `<p class="status err">${String(e)}</p>`;
 });
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      /* SW registration failed — app works fine without it */
+    });
+  });
+}
