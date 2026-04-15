@@ -18,6 +18,7 @@ const LS_TOKEN = "io3233_token";
 const LS_OPEN_CHATS = "io3233_open_chats";
 const LS_SENT = "io3233_sent_by_contact_v1";
 const LS_LAST_READ = "io3233_last_read_msg_id_by_fp_v1";
+const LS_THEME = "io3233_theme";
 
 type SentLine = { ts: number; text: string };
 
@@ -637,6 +638,20 @@ function scheduleWsReconnect(
   }, delay);
 }
 
+function getPreferredTheme(): "dark" | "light" {
+  const saved = localStorage.getItem(LS_THEME);
+  if (saved === "light" || saved === "dark") return saved;
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function applyTheme(theme: "dark" | "light") {
+  document.documentElement.setAttribute("data-theme", theme);
+  const meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
+  if (meta) meta.content = theme === "light" ? "#ffffff" : "#000000";
+}
+
+applyTheme(getPreferredTheme());
+
 async function main() {
   const { pair, fingerprint } = await loadOrCreateKeys();
 
@@ -899,12 +914,28 @@ async function main() {
           target="_blank"
           rel="noopener noreferrer"
         >Source</a>
+        · <button type="button" class="theme-toggle" id="themeToggle"></button>
       </p>
     </footer>
   `;
 
   const liveIndicator = app.querySelector("#liveIndicator")!;
   const liveHint = app.querySelector("#liveHint")!;
+  const themeToggle = app.querySelector<HTMLButtonElement>("#themeToggle")!;
+
+  function updateThemeToggleLabel() {
+    const current = document.documentElement.getAttribute("data-theme") ?? "dark";
+    themeToggle.textContent = current === "dark" ? "Light mode" : "Dark mode";
+  }
+  updateThemeToggleLabel();
+
+  themeToggle.addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme") ?? "dark";
+    const next = current === "dark" ? "light" : "dark";
+    applyTheme(next);
+    localStorage.setItem(LS_THEME, next);
+    updateThemeToggleLabel();
+  });
   const serverUrlEl = app.querySelector<HTMLInputElement>("#serverUrl")!;
   const saveServer = app.querySelector("#saveServer")!;
   const statsIdentities = app.querySelector("#statsIdentities")!;
