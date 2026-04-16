@@ -478,6 +478,18 @@ type ServerMessage = {
   created_at: string;
 };
 
+function formatLibraryDate(ts: number): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function decryptServerMessage(m: ServerMessage, pair: BoxKeyPair): LibraryEntry {
   const serverTs = Date.parse(m.created_at) || 0;
   const senderFp = m.sender_fingerprint
@@ -487,11 +499,12 @@ function decryptServerMessage(m: ServerMessage, pair: BoxKeyPair): LibraryEntry 
   const nonce = b64decode(m.nonce);
   const senderPk = b64decode(m.sender_public_key);
   const plain = decryptFromSender(ct, nonce, senderPk, pair);
+  const when = formatLibraryDate(serverTs);
   if (!plain) {
     return {
       id: m.id,
       text: "(decrypt failed)",
-      meta: `#${m.id} · ${m.created_at}`,
+      meta: `#${m.id} · ${when}`,
       senderFp,
       serverTs,
     };
@@ -510,7 +523,7 @@ function decryptServerMessage(m: ServerMessage, pair: BoxKeyPair): LibraryEntry 
   return {
     id: m.id,
     text: display,
-    meta: `${short} · ${m.created_at}`,
+    meta: `${short} · ${when}`,
     senderFp,
     serverTs,
   };
@@ -715,12 +728,10 @@ async function main() {
       <main class="app-main">
         <section id="view-newchat" class="view-panel" role="tabpanel" aria-labelledby="tab-newchat">
           <p class="key-intro chat-intro">
-            <strong>New chat</strong> — copy your invite link or public key so others can reach you. To start a conversation, paste someone else’s fingerprint or public key and <strong>Open chat</strong>, then go to the <strong>chats</strong> tab to read and send messages.
+            Share your identity below so others can reach you, or paste someone else’s to <strong>Open chat</strong>.
           </p>
           <div class="invite-link-block">
-            <p class="invite-link-hint">
-              Share your identity — tap <strong>Copy</strong> on either field.
-            </p>
+            <p class="invite-link-hint">Your identity on this relay</p>
             <div class="share-field-group">
               <label for="inviteLinkInput">Invite link</label>
               <div class="share-field-row">
@@ -762,71 +773,84 @@ async function main() {
               </div>
             </div>
           </div>
-          <div class="row">
-            <div style="flex:2 1 220px">
+          <div class="row open-chat-row">
+            <div class="open-chat-input-wrap">
               <label for="openChatFp">Their fingerprint (64 hex) or public key (base64)</label>
               <input
                 type="text"
                 id="openChatFp"
                 placeholder="Paste fingerprint or base64 public key…"
                 autocomplete="off"
+                inputmode="text"
+                spellcheck="false"
               />
             </div>
             <button type="button" id="openChatBtn">Open chat</button>
           </div>
-          <p class="status" id="openChatStatus"></p>
+          <p class="status" id="openChatStatus" role="status" aria-live="polite"></p>
         </section>
 
         <section id="view-chats" class="view-panel" role="tabpanel" aria-labelledby="tab-chats" hidden>
           <div id="mobileChatTabs" class="chat-tabs chat-tabs--mobile"></div>
-          <p class="status chat-empty-hint" id="chatEmptyHint">
-            No thread yet — open a conversation from <strong>new chat</strong>, or tap a thread above.
-          </p>
+          <div class="empty-state chat-empty-hint" id="chatEmptyHint">
+            <div class="empty-state-glyph" aria-hidden="true">[ ]</div>
+            <h2 class="empty-state-title">No open threads</h2>
+            <p class="empty-state-body">
+              Open a conversation from <strong>new chat</strong>, or tap an invite link someone shared with you.
+            </p>
+            <button type="button" class="secondary empty-state-cta" id="chatEmptyGoNew">Go to new chat</button>
+          </div>
           <div class="chat-thread" id="chatThread" hidden>
-            <div class="chat-with-block">
-              <div class="chat-with-label">Contact — their public key fingerprint</div>
+            <header class="chat-with-block">
               <div class="chat-thread-id-row">
+                <span class="chat-with-label" aria-hidden="true">to</span>
                 <p class="chat-thread-id mono" id="chatThreadHead"></p>
-                <button type="button" class="secondary chat-thread-copy" id="chatThreadCopy" aria-label="Copy fingerprint">Copy</button>
+                <button type="button" class="secondary chat-thread-copy" id="chatThreadCopy" aria-label="Copy recipient fingerprint">Copy</button>
               </div>
-              <p class="chat-thread-hint">
-                This is the person you’re messaging (recipient), not your own key. Your fingerprint is on the <strong>keys</strong> tab.
-              </p>
-            </div>
-            <div class="chat-messages" id="chatMessages"></div>
+            </header>
+            <div class="chat-messages" id="chatMessages" aria-live="polite" aria-relevant="additions"></div>
             <div class="chat-composer">
               <label for="chatBody" class="sr-only">Message</label>
               <div class="chat-composer-row">
-                <textarea id="chatBody" placeholder="Type a message…" rows="2"></textarea>
+                <textarea id="chatBody" placeholder="Type a message…" rows="2" aria-label="Message"></textarea>
                 <button type="button" id="chatSend">Send</button>
               </div>
-              <p class="status" id="chatSendStatus"></p>
+              <p class="status chat-send-status" id="chatSendStatus" role="status" aria-live="polite"></p>
             </div>
           </div>
         </section>
 
         <section id="view-server" class="view-panel" role="tabpanel" aria-labelledby="tab-server" hidden>
+          <p class="key-intro">
+            Point this client at any 3233-compatible relay. Your keys stay in this browser; only ciphertext crosses the wire.
+          </p>
           <div class="row">
             <div>
               <label for="serverUrl">API base URL</label>
-              <input type="text" id="serverUrl" placeholder="https://chat.example.com" autocomplete="off" />
+              <input type="text" id="serverUrl" placeholder="https://chat.example.com" autocomplete="off" inputmode="url" spellcheck="false" />
             </div>
-            <button type="button" class="secondary" id="saveServer">Save</button>
+            <button type="button" id="saveServer">Save</button>
           </div>
-          <p class="server-stats" id="serverStats">
-            Registered identities (all time): <strong id="statsIdentities">—</strong>
-          </p>
-          <p class="server-retention" id="serverRetention">
-            Queued mail is deleted after <strong><span id="retentionDays">—</span> days</strong> if not collected (server policy).
-          </p>
-          <p class="status" id="serverStatus"></p>
+          <p class="status" id="serverStatus" role="status" aria-live="polite"></p>
+          <div class="server-info-grid" aria-label="Server stats">
+            <div class="server-info-card">
+              <div class="server-info-label">Registered identities</div>
+              <div class="server-info-value mono"><span id="statsIdentities">—</span></div>
+              <div class="server-info-hint">all time, this relay</div>
+            </div>
+            <div class="server-info-card">
+              <div class="server-info-label">Mail retention</div>
+              <div class="server-info-value mono"><span id="retentionDays">—</span> days</div>
+              <div class="server-info-hint">queued mail deleted if uncollected</div>
+            </div>
+          </div>
         </section>
 
         <section id="view-keys" class="view-panel" role="tabpanel" aria-labelledby="tab-keys" hidden>
           <p class="key-intro"><strong>Fingerprint</strong> = your address. Share it so others can reach you.</p>
 
           <details class="key-disclosure" open>
-            <summary class="key-summary">Public» <span class="key-tag">safe to share</span></summary>
+            <summary class="key-summary"><span class="key-summary-label">Public</span> <span class="key-tag">safe to share</span></summary>
             <div class="key-disclosure-body">
               <div class="key-block key-public">
                 <p class="key-help">Contacts need this to encrypt to you (or fetch by fingerprint from this server).</p>
@@ -862,7 +886,7 @@ async function main() {
           </details>
 
           <details class="key-disclosure" open>
-            <summary class="key-summary">Private» <span class="key-tag key-tag-danger">never share</span></summary>
+            <summary class="key-summary"><span class="key-summary-label">Private</span> <span class="key-tag key-tag-danger">never share</span></summary>
             <div class="key-disclosure-body">
               <div class="key-block key-private">
                 <p class="key-help">Full access + impersonation. Stays in-browser unless you export.</p>
@@ -883,8 +907,8 @@ async function main() {
 
         <section id="view-library" class="view-panel" role="tabpanel" aria-labelledby="tab-library" hidden>
           <p class="key-intro"><span class="badge">local decrypt</span> Inbox history stored in this tab.</p>
-          <div class="row">
-            <div style="flex:2 1 220px">
+          <div class="row library-search-row">
+            <div class="library-search-wrap">
               <label for="librarySearch">Search</label>
               <input type="text" id="librarySearch" placeholder="text, sender, date…" autocomplete="off" />
             </div>
@@ -925,10 +949,12 @@ async function main() {
             </p>
             <p class="about-lead about-source-link">
               <a
+                class="about-source-cta"
                 href="https://github.com/253153/3233.io"
                 target="_blank"
                 rel="noopener noreferrer"
-              >Source code on GitHub</a> — server, client, and protocol docs.
+              >Source code on GitHub →</a>
+              <span class="about-source-note">server, client, and protocol docs.</span>
             </p>
             <ul class="about-list">
               <li>
@@ -952,13 +978,18 @@ async function main() {
         <span class="live-hint" id="liveHint"></span>
       </div>
       <p class="footer-meta">
-        v0.1.0 · Made with ☕ + ❤️ · © 2026 3233.io ·
+        <span class="footer-item">v0.1.0</span>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <span class="footer-item">© 2026 3233.io</span>
+        <span class="footer-sep" aria-hidden="true">·</span>
         <a
+          class="footer-link"
           href="https://github.com/253153/3233.io"
           target="_blank"
           rel="noopener noreferrer"
         >Source</a>
-        · <button type="button" class="theme-toggle" id="themeToggle"></button>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle theme"></button>
       </p>
     </footer>
   `;
@@ -1016,6 +1047,7 @@ async function main() {
   const chatSendStatus = app.querySelector("#chatSendStatus")!;
   const chatEmptyHint = app.querySelector<HTMLElement>("#chatEmptyHint")!;
   const openChatStatus = app.querySelector<HTMLElement>("#openChatStatus")!;
+  const chatEmptyGoNew = app.querySelector<HTMLButtonElement>("#chatEmptyGoNew")!;
   const libraryList = app.querySelector("#libraryList")!;
   const librarySearch = app.querySelector<HTMLInputElement>("#librarySearch")!;
   const libraryPager = app.querySelector<HTMLElement>("#libraryPager")!;
@@ -1262,6 +1294,34 @@ async function main() {
     }, ms);
   }
 
+  /** Show an ephemeral status line that fades itself after a few seconds.
+   *  Successful toasts auto-clear; errors persist until the next action. */
+  const statusFadeTimers = new WeakMap<HTMLElement, number>();
+  function setStatus(
+    el: HTMLElement,
+    text: string,
+    kind: "ok" | "err" | "" = "",
+    autoHideMs = kind === "ok" ? 2200 : 0,
+  ) {
+    const prev = statusFadeTimers.get(el);
+    if (prev) window.clearTimeout(prev);
+    el.textContent = text;
+    el.className = kind ? `status ${kind}` : "status";
+    el.classList.toggle("is-fading", false);
+    if (autoHideMs > 0 && text) {
+      const id = window.setTimeout(() => {
+        el.classList.add("is-fading");
+        const id2 = window.setTimeout(() => {
+          el.textContent = "";
+          el.className = "status";
+          el.classList.remove("is-fading");
+        }, 260);
+        statusFadeTimers.set(el, id2);
+      }, autoHideMs);
+      statusFadeTimers.set(el, id);
+    }
+  }
+
   function stripInviteParamsFromUrl() {
     const u = new URL(window.location.href);
     u.searchParams.delete("chat");
@@ -1449,13 +1509,37 @@ async function main() {
     }
     lines.sort((a, b) => a.ts - b.ts);
     chatMessages.innerHTML = "";
-    for (const L of lines) {
+    if (lines.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "chat-thread-empty";
+      empty.textContent = "No messages yet — say hi.";
+      chatMessages.appendChild(empty);
+    }
+    // Render with clustering: show timestamp only at the end of a run of
+    // same-side messages OR when >5min gap. Group bubbles get tighter spacing.
+    const GROUP_GAP_MS = 5 * 60_000;
+    for (let i = 0; i < lines.length; i += 1) {
+      const L = lines[i]!;
+      const next = lines[i + 1];
+      const sameSideNext = next && next.kind === L.kind;
+      const closeInTimeNext = next && Math.abs(next.ts - L.ts) < GROUP_GAP_MS;
+      const isGroupTail = !sameSideNext || !closeInTimeNext;
+      const prev = lines[i - 1];
+      const sameSidePrev = prev && prev.kind === L.kind;
+      const closeInTimePrev = prev && Math.abs(L.ts - prev.ts) < GROUP_GAP_MS;
+      const isGroupHead = !sameSidePrev || !closeInTimePrev;
       const row = document.createElement("div");
-      row.className =
-        "chat-line " + (L.kind === "out" ? "chat-line-out" : "chat-line-in");
-      row.innerHTML = `<div class="chat-bubble">${escapeHtml(L.text)}</div><div class="chat-ts">${escapeHtml(
-        new Date(L.ts).toLocaleString(),
-      )}</div>`;
+      const classes = ["chat-line", L.kind === "out" ? "chat-line-out" : "chat-line-in"];
+      if (!isGroupHead) classes.push("chat-line-cont");
+      if (!isGroupTail) classes.push("chat-line-mid");
+      row.className = classes.join(" ");
+      const d = new Date(L.ts);
+      const tsShort = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const tsFull = d.toLocaleString();
+      const tsHtml = isGroupTail
+        ? `<div class="chat-ts" title="${escapeHtml(tsFull)}">${escapeHtml(tsShort)}</div>`
+        : "";
+      row.innerHTML = `<div class="chat-bubble">${escapeHtml(L.text)}</div>${tsHtml}`;
       chatMessages.appendChild(row);
     }
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -1573,17 +1657,28 @@ async function main() {
     for (const e of pageItems) {
       const div = document.createElement("div");
       div.className = "msg";
-      div.innerHTML = `<div class="meta">${escapeHtml(e.meta)}</div><div class="body">${escapeHtml(e.text)}</div>`;
+      const senderShort = e.senderFp ? shortFingerprint(e.senderFp) : "unknown";
+      const when = formatLibraryDate(e.serverTs);
+      div.innerHTML =
+        `<div class="meta">` +
+        `<span class="msg-sender mono" title="${escapeHtml(e.senderFp ?? "")}">${escapeHtml(senderShort)}</span>` +
+        `<span class="msg-when">${escapeHtml(when)}</span>` +
+        `</div>` +
+        `<div class="body">${escapeHtml(e.text)}</div>`;
       libraryList.appendChild(div);
     }
 
     if (filtered.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "status";
-      empty.style.margin = "0.5rem 0 0";
-      empty.textContent = librarySearchQuery.trim()
-        ? "No messages match your search."
-        : "No messages yet.";
+      const empty = document.createElement("div");
+      empty.className = "empty-state empty-state--inline";
+      const isSearch = !!librarySearchQuery.trim();
+      empty.innerHTML = isSearch
+        ? `<div class="empty-state-glyph" aria-hidden="true">⌕</div>` +
+          `<h2 class="empty-state-title">No matches</h2>` +
+          `<p class="empty-state-body">Try a different word, sender prefix, or month.</p>`
+        : `<div class="empty-state-glyph" aria-hidden="true">∅</div>` +
+          `<h2 class="empty-state-title">Inbox is empty</h2>` +
+          `<p class="empty-state-body">Decrypted messages from this server will appear here. Share your invite link to start receiving.</p>`;
       libraryList.appendChild(empty);
     }
 
@@ -1655,8 +1750,9 @@ async function main() {
       localStorage.removeItem(LS_TOKEN);
     }
     setServerUrl(next);
-    serverStatus.textContent = "";
+    setStatus(serverStatus as HTMLElement, "Connecting…", "", 0);
     await runSessionSetup({ resetLibrary: true });
+    setStatus(serverStatus as HTMLElement, `Saved · ${getServerUrl()}`, "ok");
     updateInviteLinkDisplay();
   });
 
@@ -1744,6 +1840,10 @@ async function main() {
   }
 
   openChatBtn.addEventListener("click", () => void openChatFromInput());
+  chatEmptyGoNew.addEventListener("click", () => {
+    navigateToView("newchat");
+    window.setTimeout(() => openChatFpEl.focus(), 50);
+  });
   openChatFpEl.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") {
       ev.preventDefault();
@@ -1753,33 +1853,38 @@ async function main() {
 
   updateInviteLinkDisplay();
 
-  chatSend.addEventListener("click", async () => {
-    chatSendStatus.textContent = "";
-    chatSendStatus.className = "status";
+  async function doSendMessage() {
     const rf = activeChatFp;
     if (!rf) {
-      chatSendStatus.textContent = "Open a chat tab first.";
-      chatSendStatus.className = "status err";
+      setStatus(chatSendStatus as HTMLElement, "Open a chat tab first.", "err");
       return;
     }
     const text = chatBodyEl.value.trim();
     if (!text) {
-      chatSendStatus.textContent = "Enter a message.";
-      chatSendStatus.className = "status err";
+      setStatus(chatSendStatus as HTMLElement, "Enter a message.", "err");
       return;
     }
     chatSend.disabled = true;
+    setStatus(chatSendStatus as HTMLElement, "Sending…", "", 0);
     const res = await sendMessage(pair, rf, text);
     chatSend.disabled = false;
     if (res.ok) {
-      chatSendStatus.textContent = "Sent.";
-      chatSendStatus.className = "status ok";
+      setStatus(chatSendStatus as HTMLElement, "Sent", "ok");
       appendSent(rf, text);
       chatBodyEl.value = "";
       renderActiveThread();
+      chatBodyEl.focus();
     } else {
-      chatSendStatus.textContent = res.err ?? "Send failed";
-      chatSendStatus.className = "status err";
+      setStatus(chatSendStatus as HTMLElement, res.err ?? "Send failed", "err");
+    }
+  }
+
+  chatSend.addEventListener("click", () => void doSendMessage());
+  chatBodyEl.addEventListener("keydown", (ev) => {
+    // Ctrl/Cmd+Enter sends; plain Enter inserts newline (standard chat convention).
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+      ev.preventDefault();
+      void doSendMessage();
     }
   });
 
