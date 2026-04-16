@@ -7,6 +7,10 @@
   "scripts": {
     "dev": "npm run dev -w client",
     "build": "npm run build -w client",
-    "dev:server": "cd server && JWT_SECRET=dev-secret cargo run"
+    "dev:server": "cd server && JWT_SECRET=dev-secret cargo run",
+    "test": "npm run test:server && npm run test:client && npm run test:e2e",
+    "test:server": "cd server && cargo test",
+    "test:client": "npm run test -w client",
+    "test:e2e": "cd e2e && node run.mjs"
   }
 }

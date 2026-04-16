@@ -431,9 +431,42 @@ Full detail: **[docs/PROTOCOL.md](docs/PROTOCOL.md)** (`/v1/register`, `/v1/mess
 
 ---
 
+## Testing
+
+The project ships with three layers of tests that can be run individually or together.
+
+```bash
+# One-time setup (the client workspace is shared; e2e has its own package)
+npm install
+(cd e2e && npm install)
+
+# Run everything: server unit + integration, client unit, end-to-end.
+npm test
+
+# Or per-layer:
+npm run test:server        # cargo test (unit + integration)
+npm run test:client        # vitest run — client helpers & crypto
+npm run test:e2e           # puppeteer-core driven specs
+
+# E2E helpers
+cd e2e && node run.mjs --only=chat      # run a single spec by substring
+CHROMIUM_PATH=/usr/bin/chromium npm run test:e2e
+```
+
+| Layer | Runner | Lives in | Coverage |
+| --- | --- | --- | --- |
+| Rust unit | `cargo test --lib` | `server/src/lib.rs` `#[cfg(test)] mod unit_tests` | fingerprint hashing, base64 / hex validation, JWT sign + verify + expiry |
+| Rust integration | `cargo test --test api` | `server/tests/api.rs` | every HTTP route (`/v1/register`, `/v1/messages`, `/v1/me`, `/v1/keys`, `/v1/stats`) happy paths **and** every 4xx/413 branch; WebSocket `connected` + `new_message` + `ping`/`pong`; rejects bogus tokens. Each test boots a fresh axum app against `sqlite::memory:` on an ephemeral port. |
+| Client unit | `vitest run` (`happy-dom`) | `client/src/*.test.ts` | `crypto.ts` round-trip (NaCl box encrypt/decrypt, tampered ciphertext, distinct nonces), `helpers.ts` (fingerprint normalization, notification body formatting, cross-tab CAS claim, HTML escaping, route mapping). |
+| E2E | `node e2e/run.mjs` | `e2e/specs/*.mjs` | Smoke test (all views render, zero `pageerror`), two-user chat (delivery, Enter vs Shift+Enter, XSS escape, emoji, long payloads, self-chat rejection, message ordering parity), notifications (backgrounded tab fires exactly one OS-level notification per message). |
+
+The e2e harness builds the client with `vite build`, serves it from the Rust binary via `STATIC_DIR`, boots on an ephemeral port, and drives a headless Chromium via `puppeteer-core`. Chromium is auto-discovered at `/usr/bin/chromium`, `/usr/bin/google-chrome-stable`, or `$CHROMIUM_PATH`.
+
+---
+
 ## Contributing
 
-Issues and PRs are welcome. Please keep changes focused; match existing style in Rust and TypeScript. For behavior changes, update **docs/PROTOCOL.md** if the wire API or identity rules change.
+Issues and PRs are welcome. Please keep changes focused; match existing style in Rust and TypeScript. For behavior changes, update **docs/PROTOCOL.md** if the wire API or identity rules change. Run `npm test` before submitting.
 
 ---
 

@@ -9,6 +9,14 @@ import {
   shortFingerprint,
 } from "./crypto";
 import { toQrDataUrl } from "./qr";
+import {
+  buildNotifBody,
+  localCasClaim,
+  normalizeFingerprint,
+  normalizePathname,
+  pathnameToView as pathnameToViewRaw,
+  viewToPath,
+} from "./helpers";
 import "./style.css";
 
 const LS_SERVER = "io3233_server_url";
@@ -20,7 +28,7 @@ const LS_SENT = "io3233_sent_by_contact_v1";
 const LS_LAST_READ = "io3233_last_read_msg_id_by_fp_v1";
 const LS_THEME = "io3233_theme";
 
-type SentLine = { ts: number; text: string };
+type SentLine = { ts: number; text: string; id?: number };
 
 function getServerUrl(): string {
   const saved = localStorage.getItem(LS_SERVER);
@@ -41,12 +49,6 @@ function wsUrl(): string {
   const u = new URL(apiBase());
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   return u.toString().replace(/\/$/, "");
-}
-
-function normalizeFingerprint(raw: string): string | null {
-  const s = raw.replace(/\s+/g, "").toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(s)) return null;
-  return s;
 }
 
 /** NaCl box public key length (Curve25519), bytes */
@@ -109,21 +111,8 @@ function parseHttpUrlOrNull(raw: string): string | null {
 const VIEW_IDS = ["newchat", "chats", "server", "keys", "library", "about"] as const;
 type ViewId = (typeof VIEW_IDS)[number];
 
-function normalizePathname(pathname: string): string {
-  const p = pathname.replace(/\/$/, "");
-  return p === "" ? "/" : p;
-}
-
 function pathnameToView(pathname: string): ViewId | null {
-  const p = normalizePathname(pathname);
-  if (p === "/") return null;
-  const seg = p.slice(1);
-  if (seg.includes("/")) return null;
-  return VIEW_IDS.includes(seg as ViewId) ? (seg as ViewId) : null;
-}
-
-function viewToPath(view: string): string {
-  return "/" + view;
+  return pathnameToViewRaw(pathname, VIEW_IDS) as ViewId | null;
 }
 
 const ROUTE_SEO: Record<ViewId, { title: string; description: string }> = {
@@ -305,11 +294,11 @@ function saveLastReadMap(m: Record<string, number>) {
   localStorage.setItem(LS_LAST_READ, JSON.stringify(m));
 }
 
-function appendSent(toFp: string, text: string) {
+function appendSent(toFp: string, text: string, ts?: number, id?: number) {
   const fp = toFp.toLowerCase();
   const m = loadSentMap();
   if (!m[fp]) m[fp] = [];
-  m[fp].push({ ts: Date.now(), text });
+  m[fp].push({ ts: ts ?? Date.now(), text, ...(id !== undefined ? { id } : {}) });
   saveSentMap(m);
 }
 
@@ -358,8 +347,13 @@ let librarySearchQuery = "";
 
 /** Set from main(): add tabs for all senders in inbox after history sync. */
 let syncTabsAfterBackfill: (() => void) | undefined;
-/** Set from main(): new message from poll/WS — open or focus sender tab. */
-let onNewPolledEntry: ((entry: LibraryEntry) => void) | undefined;
+/** Set from main(): deliver all newly pulled messages as a single batch so the
+ * handler can decide whether to fan them out per-entry or coalesce into a
+ * summary notification. */
+let onNewPolledEntries: ((entries: LibraryEntry[]) => void) | undefined;
+
+/** Threshold above which we coalesce per-entry notifications into one summary. */
+const NOTIF_BATCH_COALESCE_MIN = 4;
 
 async function register(pair: BoxKeyPair): Promise<{ ok: boolean; err?: string }> {
   const r = await fetch(`${apiBase()}/v1/register`, {
@@ -442,31 +436,51 @@ async function sendMessage(
   pair: BoxKeyPair,
   recipientFingerprint: string,
   text: string,
-): Promise<{ ok: boolean; err?: string }> {
+): Promise<{ ok: boolean; err?: string; id?: number; serverTs?: number }> {
   const token = getToken();
   if (!token) return { ok: false, err: "Not registered" };
-  const recipientPk = await fetchRecipientPk(recipientFingerprint.trim());
+  let recipientPk: Uint8Array;
+  try {
+    recipientPk = await fetchRecipientPk(recipientFingerprint.trim());
+  } catch (e) {
+    const m = (e as Error).message || String(e);
+    if (/HTTP 404|not registered|no such user/i.test(m)) {
+      return { ok: false, err: "Recipient not registered yet." };
+    }
+    return { ok: false, err: "Couldn't reach server." };
+  }
   const body = JSON.stringify({ text, ts: Date.now() });
   const enc = new TextEncoder().encode(body);
   const { ciphertext, nonce } = encryptForRecipient(enc, recipientPk, pair);
-  const r = await fetch(`${apiBase()}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      recipient_fingerprint: recipientFingerprint.trim(),
-      ciphertext: b64encode(ciphertext),
-      nonce: b64encode(nonce),
-      sender_public_key: b64encode(pair.publicKey),
-    }),
-  });
+  let r: Response;
+  try {
+    r = await fetch(`${apiBase()}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        recipient_fingerprint: recipientFingerprint.trim(),
+        ciphertext: b64encode(ciphertext),
+        nonce: b64encode(nonce),
+        sender_public_key: b64encode(pair.publicKey),
+      }),
+    });
+  } catch {
+    return { ok: false, err: "You appear to be offline." };
+  }
   if (!r.ok) {
-    const t = await r.text();
+    const t = await r.text().catch(() => "");
     return { ok: false, err: t || r.statusText };
   }
-  return { ok: true };
+  try {
+    const j = (await r.json()) as { id?: number; created_at?: string };
+    const serverTs = j.created_at ? Date.parse(j.created_at) : undefined;
+    return { ok: true, id: j.id, serverTs: Number.isFinite(serverTs) ? serverTs : undefined };
+  } catch {
+    return { ok: true };
+  }
 }
 
 type ServerMessage = {
@@ -572,14 +586,14 @@ async function pullNewMessages(pair: BoxKeyPair): Promise<void> {
   );
   if (!r.ok) return;
   const j = (await r.json()) as { messages: ServerMessage[] };
+  const fresh: LibraryEntry[] = [];
   for (const m of j.messages) {
     if (m.id <= lastMsgId) continue;
     lastMsgId = m.id;
     const entry = decryptServerMessage(m, pair);
-    if (mergeLibraryEntry(entry)) {
-      onNewPolledEntry?.(entry);
-    }
+    if (mergeLibraryEntry(entry)) fresh.push(entry);
   }
+  if (fresh.length > 0) onNewPolledEntries?.(fresh);
 }
 
 function clearWsReconnect() {
@@ -697,6 +711,8 @@ applyTheme(getPreferredTheme());
 
 type NotifPermission = "default" | "granted" | "denied" | "unsupported";
 
+const NOTIF_READY_TIMEOUT_MS = 1500;
+
 function notifSupported(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -712,10 +728,26 @@ function getNotifPermission(): NotifPermission {
   return "default";
 }
 
+/**
+ * Normalize requestPermission across browsers. Safari < 16 exposes the old
+ * callback-only form that returns undefined; we treat both shapes uniformly.
+ */
 async function requestNotifPermission(): Promise<NotifPermission> {
   if (!notifSupported()) return "unsupported";
   try {
-    const res = await Notification.requestPermission();
+    const maybe = Notification.requestPermission();
+    const res =
+      maybe && typeof (maybe as Promise<NotificationPermission>).then === "function"
+        ? await (maybe as Promise<NotificationPermission>)
+        : await new Promise<NotificationPermission>((resolve) => {
+            try {
+              (Notification.requestPermission as unknown as (
+                cb: (p: NotificationPermission) => void,
+              ) => void)((p) => resolve(p));
+            } catch {
+              resolve(getNotifPermission() as NotificationPermission);
+            }
+          });
     return res === "granted" || res === "denied" || res === "default"
       ? res
       : "default";
@@ -724,12 +756,55 @@ async function requestNotifPermission(): Promise<NotifPermission> {
   }
 }
 
-const NOTIF_BODY_MAX = 140;
+/** Resolve the active SW registration, or null if it doesn't settle in time. */
+function readyRegistrationOrNull(): Promise<ServiceWorkerRegistration | null> {
+  if (!("serviceWorker" in navigator)) return Promise.resolve(null);
+  let done = false;
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolve(null);
+      }
+    }, NOTIF_READY_TIMEOUT_MS);
+    navigator.serviceWorker.ready
+      .then((reg) => {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timer);
+        resolve(reg);
+      })
+      .catch(() => {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
 
-function buildNotifBody(text: string): string {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (clean.length <= NOTIF_BODY_MAX) return clean;
-  return `${clean.slice(0, NOTIF_BODY_MAX - 1)}…`;
+async function claimNotifSlot(msgId: number): Promise<boolean> {
+  const locks = (navigator as unknown as {
+    locks?: {
+      request: (
+        name: string,
+        options: { mode: "exclusive" | "shared" },
+        cb: () => Promise<boolean>,
+      ) => Promise<boolean>;
+    };
+  }).locks;
+  if (locks && typeof locks.request === "function") {
+    try {
+      return await locks.request(
+        "3233:notif-cursor",
+        { mode: "exclusive" },
+        async () => localCasClaim(msgId),
+      );
+    } catch {
+      return localCasClaim(msgId);
+    }
+  }
+  return localCasClaim(msgId);
 }
 
 type NotifPayload = {
@@ -741,24 +816,26 @@ type NotifPayload = {
 
 async function showLocalNotification(payload: NotifPayload): Promise<void> {
   if (getNotifPermission() !== "granted") return;
+  if (!(await claimNotifSlot(payload.msgId))) return;
+
   const url = `/chats?chat=${encodeURIComponent(payload.senderFp)}`;
   const options: NotificationOptions & { renotify?: boolean } = {
-    body: payload.body,
     icon: "/icon-192.png",
     badge: "/favicon-32.png",
     tag: `3233-msg-${payload.senderFp}`,
     renotify: true,
     data: { url, senderFp: payload.senderFp, msgId: payload.msgId },
   };
+  if (payload.body) options.body = payload.body;
 
-  try {
-    if ("serviceWorker" in navigator) {
-      const reg = await navigator.serviceWorker.ready;
+  const reg = await readyRegistrationOrNull();
+  if (reg) {
+    try {
       await reg.showNotification(payload.title, options);
       return;
+    } catch {
+      /* fall through */
     }
-  } catch {
-    /* fall back to page-level Notification */
   }
 
   try {
@@ -779,6 +856,69 @@ async function showLocalNotification(payload: NotifPayload): Promise<void> {
     };
   } catch {
     /* ignore: quota, insecure context, etc. */
+  }
+}
+
+/**
+ * Show a coalesced "N new messages" notification when a single pull returns a
+ * flood. Uses the largest msg id to claim the slot atomically across tabs.
+ */
+async function showBatchNotification(
+  entries: LibraryEntry[],
+): Promise<void> {
+  if (getNotifPermission() !== "granted") return;
+  if (entries.length === 0) return;
+  const maxId = entries.reduce((a, e) => Math.max(a, e.id), 0);
+  if (!(await claimNotifSlot(maxId))) return;
+
+  const senders = new Set(entries.map((e) => e.senderFp).filter(Boolean));
+  const senderCount = senders.size;
+  const single = senderCount === 1 ? [...senders][0]! : null;
+
+  const title = `${entries.length} new messages`;
+  const body = single
+    ? `From 3233:${single.slice(0, 8)}. Open to read.`
+    : `From ${senderCount} senders. Open to read.`;
+
+  const url = single ? `/chats?chat=${encodeURIComponent(single)}` : "/chats";
+
+  const options: NotificationOptions & { renotify?: boolean } = {
+    body,
+    icon: "/icon-192.png",
+    badge: "/favicon-32.png",
+    tag: "3233-msg-batch",
+    renotify: true,
+    data: { url, batch: true, count: entries.length, maxId },
+  };
+
+  const reg = await readyRegistrationOrNull();
+  if (reg) {
+    try {
+      await reg.showNotification(title, options);
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
+
+  try {
+    const n = new Notification(title, options);
+    n.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        /* ignore */
+      }
+      try {
+        n.close();
+      } catch {
+        /* ignore */
+      }
+      const u = new URL(url, window.location.origin);
+      window.location.assign(u.toString());
+    };
+  } catch {
+    /* ignore */
   }
 }
 
@@ -818,9 +958,6 @@ async function main() {
 
       <main class="app-main">
         <section id="view-newchat" class="view-panel" role="tabpanel" aria-labelledby="tab-newchat">
-          <p class="key-intro chat-intro">
-            Share your identity below so others can reach you, or paste someone else’s to <strong>Open chat</strong>.
-          </p>
           <div class="invite-link-block">
             <p class="invite-link-hint">Your identity on this relay</p>
             <div class="share-field-group">
@@ -935,6 +1072,7 @@ async function main() {
               <div class="server-info-hint">queued mail deleted if uncollected</div>
             </div>
           </div>
+
         </section>
 
         <section id="view-keys" class="view-panel" role="tabpanel" aria-labelledby="tab-keys" hidden>
@@ -1183,16 +1321,18 @@ async function main() {
         "ok",
         2200,
       );
-      try {
-        const reg = await navigator.serviceWorker.ready;
-        await reg.showNotification("3233 · alerts enabled", {
-          body: "You'll be notified when new messages arrive.",
-          icon: "/icon-192.png",
-          badge: "/favicon-32.png",
-          tag: "3233-intro",
-        });
-      } catch {
-        /* ignore */
+      const reg = await readyRegistrationOrNull();
+      if (reg) {
+        try {
+          await reg.showNotification("3233 · alerts enabled", {
+            body: "You'll be notified when new messages arrive.",
+            icon: "/icon-192.png",
+            badge: "/favicon-32.png",
+            tag: "3233-intro",
+          });
+        } catch {
+          /* ignore */
+        }
       }
     } else if (next === "denied") {
       setStatus(
@@ -1204,7 +1344,7 @@ async function main() {
     }
   });
 
-  window.addEventListener("visibilitychange", () => {
+  document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") updateNotifToggleUi();
   });
 
@@ -1236,9 +1376,10 @@ async function main() {
         const fp = u.searchParams.get("chat");
         if (fp) {
           void (async () => {
-            const ok = await openChatWithFingerprint(fp);
-            if (ok) navigateToView("chats", { replace: true });
-            else navigateToView("chats");
+            await openChatWithFingerprint(fp);
+            // Push (default) so the user can Back out to whatever view they
+            // were on when the notification arrived.
+            navigateToView("chats");
           })();
         } else {
           navigateToView("chats");
@@ -1497,6 +1638,11 @@ async function main() {
   async function openChatWithFingerprint(raw: string): Promise<boolean> {
     const fp = await resolveRecipientFingerprint(raw);
     if (!fp) return false;
+    // Prevent chatting with yourself — messages would appear twice in the
+    // thread (once as outgoing from the sent map, once as incoming after the
+    // server round-trip), which is confusing UX. Point users at the Library
+    // view if they just want to jot notes for themselves.
+    if (fp === fingerprint.toLowerCase()) return false;
     if (!openChatIds.includes(fp)) {
       openChatIds.push(fp);
       saveOpenChats(openChatIds);
@@ -1802,34 +1948,49 @@ async function main() {
     renderActiveThread();
   };
 
-  onNewPolledEntry = (entry) => {
+  onNewPolledEntries = (entries) => {
+    if (entries.length === 0) return;
     playIncomingMessageSound();
-    const fp = entry.senderFp;
-    if (!fp) return;
 
-    const wasOpen = openChatIds.includes(fp);
     const chatsPanel = app.querySelector<HTMLElement>("#view-chats");
-    const looksAtThisThread =
+    const chatsVisible =
       document.visibilityState === "visible" &&
       chatsPanel !== null &&
-      !chatsPanel.hidden &&
-      activeChatFp === fp;
+      !chatsPanel.hidden;
+    const notifWorthy = entries.filter((e) => {
+      if (!e.senderFp) return false;
+      const active = chatsVisible && activeChatFp === e.senderFp;
+      return !active;
+    });
 
-    if (!looksAtThisThread) {
-      void showLocalNotification({
-        title: `New message · 3233:${fp.slice(0, 8)}`,
-        body: buildNotifBody(entry.text),
-        senderFp: fp,
-        msgId: entry.id,
-      });
+    if (notifWorthy.length >= NOTIF_BATCH_COALESCE_MIN) {
+      void showBatchNotification(notifWorthy);
+    } else {
+      for (const e of notifWorthy) {
+        void showLocalNotification({
+          title: `New message · 3233:${e.senderFp!.slice(0, 8)}`,
+          body: buildNotifBody(e.text),
+          senderFp: e.senderFp!,
+          msgId: e.id,
+        });
+      }
     }
 
-    if (!wasOpen) {
-      openChatIds.push(fp);
-      saveOpenChats(openChatIds);
+    // Update open chats + focus for the most recent sender.
+    let changed = false;
+    let latestFp: string | null = null;
+    for (const entry of entries) {
+      const fp = entry.senderFp;
+      if (!fp) continue;
+      latestFp = fp;
+      if (!openChatIds.includes(fp)) {
+        openChatIds.push(fp);
+        changed = true;
+      }
     }
-    if (!wasOpen || activeChatFp !== fp) {
-      activeChatFp = fp;
+    if (changed) saveOpenChats(openChatIds);
+    if (latestFp && activeChatFp !== latestFp) {
+      activeChatFp = latestFp;
       navigateToView("chats");
     }
     renderChatTabs();
@@ -2082,6 +2243,13 @@ async function main() {
   async function openChatFromInput() {
     openChatStatus.textContent = "";
     openChatStatus.className = "status";
+    const resolved = await resolveRecipientFingerprint(openChatFpEl.value);
+    if (resolved && resolved === fingerprint.toLowerCase()) {
+      openChatStatus.textContent =
+        "That's your own fingerprint. You can't chat with yourself — send to someone else or use the Library view for personal notes.";
+      openChatStatus.className = "status err";
+      return;
+    }
     const ok = await openChatWithFingerprint(openChatFpEl.value);
     if (!ok) {
       openChatStatus.textContent =
@@ -2120,11 +2288,19 @@ async function main() {
     }
     chatSend.disabled = true;
     setStatus(chatSendStatus as HTMLElement, "Sending…", "", 0);
-    const res = await sendMessage(pair, rf, text);
-    chatSend.disabled = false;
+    let res: Awaited<ReturnType<typeof sendMessage>>;
+    try {
+      res = await sendMessage(pair, rf, text);
+    } catch (e) {
+      res = { ok: false, err: (e as Error).message || "Send failed" };
+    } finally {
+      chatSend.disabled = false;
+    }
     if (res.ok) {
       setStatus(chatSendStatus as HTMLElement, "Sent", "ok");
-      appendSent(rf, text);
+      // Prefer server timestamp so ordering is consistent with the receiver's
+      // view (otherwise client-clock skew causes the two threads to disagree).
+      appendSent(rf, text, res.serverTs, res.id);
       chatBodyEl.value = "";
       renderActiveThread();
       chatBodyEl.focus();
@@ -2135,11 +2311,17 @@ async function main() {
 
   chatSend.addEventListener("click", () => void doSendMessage());
   chatBodyEl.addEventListener("keydown", (ev) => {
-    // Ctrl/Cmd+Enter sends; plain Enter inserts newline (standard chat convention).
-    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
-      ev.preventDefault();
-      void doSendMessage();
-    }
+    // Enter sends (chat convention); Shift/Ctrl/Cmd/Alt+Enter inserts a newline.
+    // Also guard against IME composition — don't send while the user is mid-
+    // compose (macOS/Safari fire keydown for Enter during composition).
+    const isEnter = ev.key === "Enter";
+    if (!isEnter) return;
+    const isComposing =
+      ev.isComposing || (ev as unknown as { keyCode?: number }).keyCode === 229;
+    if (isComposing) return;
+    if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    ev.preventDefault();
+    void doSendMessage();
   });
 
   renderChatTabs();

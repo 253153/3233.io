@@ -8,12 +8,18 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6",
+    "@vitest/coverage-v8": "^4.1.4",
+    "happy-dom": "^20.9.0",
     "typescript": "~5.7.2",
-    "vite": "^6.0.1"
+    "vite": "^6.0.1",
+    "vitest": "^4.1.4"
   },
   "dependencies": {
     "qrcode": "^1.5.4",
