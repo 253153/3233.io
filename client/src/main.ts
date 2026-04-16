@@ -117,14 +117,14 @@ function pathnameToView(pathname: string): ViewId | null {
 
 const ROUTE_SEO: Record<ViewId, { title: string; description: string }> = {
   newchat: {
-    title: "New chat — 3233.io · ~/encrypted relay",
+    title: "Home — 3233.io · ~/encrypted relay",
     description:
       "Your invite link and public key on this relay. Share them so others can open a chat with you or encrypt to you. Keys stay in your browser.",
   },
   chats: {
     title: "Chats — 3233.io · ~/encrypted relay",
     description:
-      "Read and send end-to-end encrypted messages. Pick a thread in the sidebar or add a contact from New chat.",
+      "Read and send end-to-end encrypted messages. Pick a thread in the sidebar or add a contact from the home page.",
   },
   server: {
     title: "Server — 3233.io · ~/encrypted relay",
@@ -942,7 +942,7 @@ async function main() {
     <div class="app-shell">
       <aside class="app-sidebar" aria-label="Sidebar">
         <nav class="dashboard-tabs sidebar-main-nav" role="tablist" aria-label="Main views">
-          <button type="button" role="tab" class="dash-tab active" data-view="newchat" aria-selected="true" id="tab-newchat">new chat</button>
+          <button type="button" role="tab" class="dash-tab active" data-view="newchat" aria-selected="true" id="tab-newchat">home</button>
           <button type="button" role="tab" class="dash-tab" data-view="chats" aria-selected="false" id="tab-chats">chats</button>
           <button type="button" role="tab" class="dash-tab" data-view="server" aria-selected="false" id="tab-server">server</button>
           <button type="button" role="tab" class="dash-tab" data-view="keys" aria-selected="false" id="tab-keys">keys</button>
@@ -958,6 +958,14 @@ async function main() {
 
       <main class="app-main">
         <section id="view-newchat" class="view-panel" role="tabpanel" aria-labelledby="tab-newchat">
+          <aside class="home-intro" aria-label="How 3233 works">
+            <p class="home-intro-lede">
+              <strong>3233.io is a private, end-to-end encrypted chat relay — no accounts, no email, keys live only in this browser.</strong>
+            </p>
+            <p class="home-intro-steps">
+              Share your <strong>invite link</strong> below so someone can reach you, then paste <strong>their</strong> fingerprint or public key into <strong>Open chat</strong> to start a thread. The relay only sees encrypted bytes.
+            </p>
+          </aside>
           <div class="invite-link-block">
             <p class="invite-link-hint">Your identity on this relay</p>
             <div class="share-field-group">
@@ -1024,9 +1032,9 @@ async function main() {
             <div class="empty-state-glyph" aria-hidden="true">[ ]</div>
             <h2 class="empty-state-title">No open threads</h2>
             <p class="empty-state-body">
-              Open a conversation from <strong>new chat</strong>, or tap an invite link someone shared with you.
+              Open a conversation from <strong>home</strong>, or tap an invite link someone shared with you.
             </p>
-            <button type="button" class="secondary empty-state-cta" id="chatEmptyGoNew">Go to new chat</button>
+            <button type="button" class="secondary empty-state-cta" id="chatEmptyGoNew">Go to home</button>
           </div>
           <div class="chat-thread" id="chatThread" hidden>
             <header class="chat-with-block">
@@ -1073,6 +1081,21 @@ async function main() {
             </div>
           </div>
 
+          <aside class="server-selfhost" aria-label="Self-hosting">
+            <h2 class="server-selfhost-title">Run your own relay or host your own client</h2>
+            <p class="server-selfhost-lede">
+              <strong>3233 is open source and designed to be self-hosted.</strong>
+              The relay is a small Rust binary that only sees encrypted bytes; the client is a static HTML/JS bundle. Any 3233 client talks to any 3233 relay, so you can host one, the other, or both.
+            </p>
+            <ol class="server-selfhost-steps">
+              <li>Clone <a class="mono-inline" href="https://github.com/253153/3233.io" target="_blank" rel="noopener noreferrer">github.com/253153/3233.io</a> and build with Docker Compose or <span class="mono-inline">cargo build --release</span> + <span class="mono-inline">vite build</span>.</li>
+              <li>Run the server on any host you control; point the <strong>API base URL</strong> above at your deployment and press <strong>Save</strong>.</li>
+              <li>Optional: serve the built client bundle next to the relay (set <span class="mono-inline">STATIC_DIR=client/dist</span>) so your users get a single-origin deployment.</li>
+            </ol>
+            <p class="server-selfhost-foot">
+              The <a href="https://github.com/253153/3233.io#readme" target="_blank" rel="noopener noreferrer">README</a> has Docker Compose, bare-metal + nginx, and Let’s Encrypt walkthroughs. The wire protocol is documented in <span class="mono-inline">docs/PROTOCOL.md</span>.
+            </p>
+          </aside>
         </section>
 
         <section id="view-keys" class="view-panel" role="tabpanel" aria-labelledby="tab-keys" hidden>
@@ -2197,7 +2220,7 @@ async function main() {
     if (ok) flashButtonLabel(headerCopyInvite, "Copied");
     else
       alert(
-        "Could not copy automatically — open New chat and copy the invite link field, or try again over HTTPS.",
+        "Could not copy automatically — open Home and copy the invite link field, or try again over HTTPS.",
       );
   });
 

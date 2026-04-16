@@ -971,6 +971,72 @@ button.dash-tab:last-child {
   line-height: 1.4;
 }
 
+.server-selfhost {
+  display: block;
+  margin-top: 1.25rem;
+  padding: 0.95rem 1.05rem;
+  border: 1px solid var(--accent-tint-border);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-tint-bg);
+  border-radius: var(--radius);
+}
+
+.server-selfhost-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: 0.01em;
+}
+
+.server-selfhost-lede {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.server-selfhost-lede strong {
+  color: var(--fg);
+}
+
+.server-selfhost-steps {
+  margin: 0 0 0.65rem;
+  padding-left: 1.2rem;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.server-selfhost-steps li::marker {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.server-selfhost-steps strong {
+  color: var(--fg);
+}
+
+.server-selfhost-foot {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.server-selfhost a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.server-selfhost a:hover {
+  color: var(--accent-dim);
+}
+
 .live-badge {
   font-weight: 700;
   font-size: 0.78rem;
@@ -1020,6 +1086,34 @@ button.dash-tab:last-child {
 
 #view-newchat .key-intro.chat-intro {
   margin-bottom: 0.5rem;
+}
+
+.home-intro {
+  display: block;
+  border: 1px solid var(--accent-tint-border);
+  background: var(--accent-tint-bg);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  margin: 0 0 1.1rem;
+}
+
+.home-intro-lede {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.home-intro-steps {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.home-intro-steps strong {
+  color: var(--fg);
 }
 
 
