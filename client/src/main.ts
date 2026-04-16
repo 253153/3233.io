@@ -719,31 +719,47 @@ async function main() {
           </p>
           <div class="invite-link-block">
             <p class="invite-link-hint">
-              Share your identity: select text in the fields below and copy (right-click → Copy, or Ctrl+C / ⌘+C). Triple-click selects a whole line.
+              Share your identity — tap <strong>Copy</strong> on either field.
             </p>
             <div class="share-field-group">
               <label for="inviteLinkInput">Invite link</label>
-              <input
-                type="text"
-                id="inviteLinkInput"
-                readonly
-                spellcheck="false"
-                autocomplete="off"
-                class="share-field-input"
-                title="Read-only — select text, then copy"
-              />
+              <div class="share-field-row">
+                <input
+                  type="text"
+                  id="inviteLinkInput"
+                  readonly
+                  spellcheck="false"
+                  autocomplete="off"
+                  class="share-field-input"
+                  title="Read-only — tap to select, then copy"
+                />
+                <button
+                  type="button"
+                  class="secondary share-field-copy"
+                  id="copyInviteLinkBtn"
+                  aria-label="Copy invite link"
+                >Copy</button>
+              </div>
             </div>
             <div class="share-field-group">
               <label for="publicKeyShareInput">Your public key (base64)</label>
-              <input
-                type="text"
-                id="publicKeyShareInput"
-                readonly
-                spellcheck="false"
-                autocomplete="off"
-                class="share-field-input"
-                title="Read-only — select text, then copy"
-              />
+              <div class="share-field-row">
+                <input
+                  type="text"
+                  id="publicKeyShareInput"
+                  readonly
+                  spellcheck="false"
+                  autocomplete="off"
+                  class="share-field-input"
+                  title="Read-only — tap to select, then copy"
+                />
+                <button
+                  type="button"
+                  class="secondary share-field-copy"
+                  id="copyPublicKeyBtn"
+                  aria-label="Copy public key"
+                >Copy</button>
+              </div>
             </div>
           </div>
           <div class="row">
@@ -763,27 +779,29 @@ async function main() {
 
         <section id="view-chats" class="view-panel" role="tabpanel" aria-labelledby="tab-chats" hidden>
           <div id="mobileChatTabs" class="chat-tabs chat-tabs--mobile"></div>
-          <p class="key-intro chat-intro chat-intro--chats">
-            Select a thread in the sidebar, or add someone from <strong>new chat</strong>.
+          <p class="status chat-empty-hint" id="chatEmptyHint">
+            No thread yet — open a conversation from <strong>new chat</strong>, or tap a thread above.
           </p>
-          <p class="status chat-empty-hint" id="chatEmptyHint">No thread — use <strong>new chat</strong> to open a conversation, or select a thread in the sidebar.</p>
           <div class="chat-thread" id="chatThread" hidden>
             <div class="chat-with-block">
               <div class="chat-with-label">Contact — their public key fingerprint</div>
-              <p class="chat-thread-id mono" id="chatThreadHead"></p>
+              <div class="chat-thread-id-row">
+                <p class="chat-thread-id mono" id="chatThreadHead"></p>
+                <button type="button" class="secondary chat-thread-copy" id="chatThreadCopy" aria-label="Copy fingerprint">Copy</button>
+              </div>
               <p class="chat-thread-hint">
                 This is the person you’re messaging (recipient), not your own key. Your fingerprint is on the <strong>keys</strong> tab.
               </p>
             </div>
+            <div class="chat-messages" id="chatMessages"></div>
             <div class="chat-composer">
-              <label for="chatBody">Message</label>
-              <textarea id="chatBody" placeholder="Type a message…" rows="4"></textarea>
-              <div class="row chat-composer-actions">
+              <label for="chatBody" class="sr-only">Message</label>
+              <div class="chat-composer-row">
+                <textarea id="chatBody" placeholder="Type a message…" rows="2"></textarea>
                 <button type="button" id="chatSend">Send</button>
               </div>
               <p class="status" id="chatSendStatus"></p>
             </div>
-            <div class="chat-messages" id="chatMessages"></div>
           </div>
         </section>
 
@@ -983,8 +1001,11 @@ async function main() {
   const headerNewKeys = app.querySelector<HTMLButtonElement>("#headerNewKeys")!;
   const inviteLinkInput = app.querySelector<HTMLInputElement>("#inviteLinkInput")!;
   const publicKeyShareInput = app.querySelector<HTMLInputElement>("#publicKeyShareInput")!;
+  const copyInviteLinkBtn = app.querySelector<HTMLButtonElement>("#copyInviteLinkBtn")!;
+  const copyPublicKeyBtn = app.querySelector<HTMLButtonElement>("#copyPublicKeyBtn")!;
   const openChatFpEl = app.querySelector<HTMLInputElement>("#openChatFp")!;
   const openChatBtn = app.querySelector<HTMLButtonElement>("#openChatBtn")!;
+  const chatThreadCopy = app.querySelector<HTMLButtonElement>("#chatThreadCopy")!;
   const chatTabsEl = app.querySelector("#chatTabs")!;
   const mobileChatTabsEl = app.querySelector("#mobileChatTabs")!;
   const chatThread = app.querySelector<HTMLElement>("#chatThread")!;
@@ -1415,7 +1436,8 @@ async function main() {
     }
     chatEmptyHint.hidden = true;
     chatThread.hidden = false;
-    chatThreadHead.textContent = `${shortFingerprint(activeChatFp)} · ${activeChatFp.slice(0, 18)}…`;
+    chatThreadHead.textContent = shortFingerprint(activeChatFp);
+    chatThreadHead.title = activeChatFp;
     const incoming = libraryEntries.filter((e) => e.senderFp === activeChatFp);
     const sent = loadSentMap()[activeChatFp] ?? [];
     const lines: { kind: "in" | "out"; ts: number; text: string }[] = [];
@@ -1425,7 +1447,7 @@ async function main() {
     for (const s of sent) {
       lines.push({ kind: "out", ts: s.ts, text: s.text });
     }
-    lines.sort((a, b) => b.ts - a.ts);
+    lines.sort((a, b) => a.ts - b.ts);
     chatMessages.innerHTML = "";
     for (const L of lines) {
       const row = document.createElement("div");
@@ -1436,7 +1458,7 @@ async function main() {
       )}</div>`;
       chatMessages.appendChild(row);
     }
-    chatMessages.scrollTop = 0;
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
   syncTabsAfterBackfill = () => {
@@ -1673,6 +1695,39 @@ async function main() {
     if (ok) flashButtonLabel(headerCopyAddress, "Copied");
     else alert("Could not copy automatically — try again over HTTPS or copy from the keys tab.");
   });
+
+  copyInviteLinkBtn.addEventListener("click", async () => {
+    updateInviteLinkDisplay();
+    const ok = await copyTextToClipboard(buildInviteLink());
+    if (ok) flashButtonLabel(copyInviteLinkBtn, "Copied");
+    else alert("Could not copy — select the text and copy manually, or try again over HTTPS.");
+  });
+
+  copyPublicKeyBtn.addEventListener("click", async () => {
+    const ok = await copyTextToClipboard(b64encode(pair.publicKey));
+    if (ok) flashButtonLabel(copyPublicKeyBtn, "Copied");
+    else alert("Could not copy — select the text and copy manually, or try again over HTTPS.");
+  });
+
+  chatThreadCopy.addEventListener("click", async () => {
+    if (!activeChatFp) return;
+    const ok = await copyTextToClipboard(activeChatFp);
+    if (ok) flashButtonLabel(chatThreadCopy, "Copied");
+    else alert("Could not copy — select the fingerprint and copy manually.");
+  });
+
+  // Tap or focus the read-only share fields to select all — fast copy on mobile.
+  for (const el of [inviteLinkInput, publicKeyShareInput]) {
+    const selectAll = () => {
+      try {
+        el.setSelectionRange(0, el.value.length);
+      } catch {
+        /* ignore */
+      }
+    };
+    el.addEventListener("focus", selectAll);
+    el.addEventListener("click", selectAll);
+  }
 
   async function openChatFromInput() {
     openChatStatus.textContent = "";

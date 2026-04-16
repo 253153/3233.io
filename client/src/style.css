@@ -88,6 +88,13 @@
   box-sizing: border-box;
 }
 
+/* Author styles (display: flex on .chat-thread etc.) otherwise beat the UA
+   `[hidden]{display:none}` rule because class selectors outrank it. Make the
+   `hidden` attribute always win, everywhere. */
+[hidden] {
+  display: none !important;
+}
+
 html {
   height: 100%;
 }
@@ -314,115 +321,6 @@ a:hover {
   border-top: 1px solid var(--border);
 }
 
-@media (max-width: 768px) {
-  .site-header {
-    flex-wrap: wrap;
-    padding: 0.35rem 0.5rem;
-    gap: 0.3rem 0.5rem;
-  }
-
-  .brand-path {
-    display: none;
-  }
-
-  .site-header-actions {
-    gap: 0.25rem;
-  }
-
-  button.site-header-btn {
-    font-size: 0.65rem;
-    padding: 0.22rem 0.4rem;
-  }
-
-  .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .app-sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .sidebar-main-nav.dashboard-tabs {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    border-bottom: none;
-  }
-
-  .app-sidebar .dash-tab {
-    width: auto;
-    flex-shrink: 0;
-    border-bottom: none;
-    border-right: 1px solid var(--border);
-    padding: 0.38rem 0.6rem;
-    font-size: 0.78rem;
-    white-space: nowrap;
-  }
-
-  .app-sidebar .dash-tab:last-child {
-    border-right: none;
-    border-bottom: none;
-  }
-
-  .sidebar-chats-panel {
-    display: none;
-  }
-
-  .chat-tabs--mobile {
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    gap: 0;
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--border);
-    margin: -0.65rem -0.65rem 0.5rem;
-    padding: 0;
-  }
-
-  .chat-tabs--mobile .chat-tab {
-    flex-shrink: 0;
-    border-right: 1px solid var(--border);
-    border-bottom: none;
-  }
-
-  .chat-tabs--mobile .chat-tab:last-child {
-    border-right: none;
-  }
-
-  .view-panel {
-    padding: 0.65rem 0.65rem 0.75rem;
-  }
-
-  .site-footer {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.35rem;
-    padding: 0.45rem 0.5rem;
-  }
-
-  .footer-meta {
-    font-size: 0.75rem;
-    text-align: left;
-  }
-}
-
-/* Very short windows: allow page scroll so nothing is unreachable */
-@media (max-height: 26rem) {
-  body {
-    overflow: auto;
-  }
-
-  #app {
-    overflow: visible;
-  }
-}
-
 .site-header {
   display: flex;
   align-items: center;
@@ -480,6 +378,37 @@ button.site-header-btn {
 .share-field-input[readonly],
 .share-field-textarea[readonly] {
   cursor: text;
+}
+
+.share-field-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.share-field-row .share-field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.share-field-copy {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  padding: 0 0.7rem;
+  line-height: 1;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .key-pub-field {
@@ -902,9 +831,6 @@ button.dash-tab:last-child {
   margin-bottom: 0.5rem;
 }
 
-#view-chats .key-intro.chat-intro--chats {
-  margin-bottom: 0.5rem;
-}
 
 .key-block {
   border-radius: var(--radius);
@@ -1039,8 +965,12 @@ button.dash-tab:last-child {
   align-items: stretch;
 }
 
-.chat-tabs--mobile {
-  display: none;
+/* Mobile-only horizontal chat tab strip above the thread. Desktop uses the
+   sidebar-based tab list instead. */
+@media (min-width: 769px) {
+  .chat-tabs--mobile {
+    display: none;
+  }
 }
 
 .chat-tabs--sidebar .chat-tab {
@@ -1170,12 +1100,29 @@ button.dash-tab:last-child {
 }
 
 .chat-thread-id {
-  margin: 0 0 0.35rem;
+  margin: 0;
   font-family: var(--mono);
   font-size: 0.82rem;
   color: var(--text);
   line-height: 1.45;
   word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-thread-id-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0 0 0.35rem;
+}
+
+.chat-thread-copy {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.55rem;
+  line-height: 1.1;
 }
 
 .chat-thread-hint {
@@ -1204,16 +1151,31 @@ button.dash-tab:last-child {
 
 .chat-composer {
   flex-shrink: 0;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0 0;
+  border-top: 1px solid var(--border);
 }
 
 .chat-composer .row {
   margin-bottom: 0;
 }
 
-.chat-composer-actions {
-  margin-top: 0.5rem;
+.chat-composer-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.chat-composer-row textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.4rem;
+  resize: vertical;
+}
+
+.chat-composer-row button {
+  flex-shrink: 0;
+  align-self: stretch;
+  padding: 0.45rem 1.1rem;
 }
 
 .chat-line.chat-line-in {
@@ -1258,4 +1220,188 @@ button.dash-tab:last-child {
 
 .chat-line-out .chat-ts {
   text-align: right;
+}
+
+/* ============================================================
+ * Responsive overrides — placed after all base rules so that
+ * equal-specificity media query rules win via source order.
+ * ============================================================ */
+
+@media (max-width: 768px) {
+  .site-header {
+    flex-wrap: wrap;
+    padding: 0.35rem 0.5rem;
+    gap: 0.3rem 0.4rem;
+  }
+
+  .brand-path {
+    display: none;
+  }
+
+  .site-header-actions {
+    gap: 0.25rem;
+    /* Allow actions to shrink below content width so buttons wrap cleanly
+       onto a second row on narrow phones instead of clipping. */
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  button.site-header-btn {
+    font-size: 0.68rem;
+    padding: 0.22rem 0.45rem;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Main nav wraps to a second row at narrow widths rather than scrolling
+     horizontally — avoids hidden overflow and awkward scrollbars. Each tab
+     grows to share the row evenly. */
+  .sidebar-main-nav.dashboard-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-x: visible;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .app-sidebar .dash-tab {
+    flex: 1 1 auto;
+    width: auto;
+    border-bottom: none;
+    border-right: 1px solid var(--border);
+    padding: 0.38rem 0.5rem;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  .app-sidebar .dash-tab:last-child {
+    border-right: none;
+    border-bottom: none;
+  }
+
+  .sidebar-chats-panel {
+    display: none;
+  }
+
+  .chat-tabs--mobile {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 0;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    margin: -0.65rem -0.65rem 0.5rem;
+    padding: 0;
+  }
+
+  .chat-tabs--mobile:empty {
+    display: none;
+  }
+
+  .chat-tabs--mobile .chat-tab {
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    border-bottom: none;
+  }
+
+  .chat-tabs--mobile .chat-tab:last-child {
+    border-right: none;
+  }
+
+  .view-panel {
+    padding: 0.65rem 0.65rem 0.75rem;
+  }
+
+  .site-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    padding: 0.45rem 0.5rem;
+  }
+
+  .footer-meta {
+    font-size: 0.75rem;
+    text-align: left;
+  }
+}
+
+/* Narrow phones: stack input + action so the input never squeezes the button
+   out of the viewport. Also applies to the chat composer row. */
+@media (max-width: 480px) {
+  #view-newchat .row,
+  #view-server .row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  #view-newchat .row > div,
+  #view-server .row > div {
+    min-width: 0;
+    width: 100%;
+  }
+
+  #view-newchat .row > button,
+  #view-server .row > button {
+    align-self: stretch;
+  }
+
+  .chat-composer-row {
+    flex-direction: column;
+  }
+
+  .chat-composer-row button {
+    align-self: flex-end;
+    min-width: 6rem;
+  }
+
+  .share-field-copy {
+    padding: 0.45rem 0.7rem;
+  }
+}
+
+/* Very narrow phones (≤400px): downscale tabs + header buttons so they fit
+   without horizontal scroll on devices like Galaxy Fold or older 320px phones. */
+@media (max-width: 400px) {
+  .app-sidebar .dash-tab {
+    padding: 0.32rem 0.35rem;
+    font-size: 0.68rem;
+    letter-spacing: 0;
+  }
+
+  button.site-header-btn {
+    font-size: 0.62rem;
+    padding: 0.2rem 0.35rem;
+  }
+
+  .site-header-actions {
+    gap: 0.2rem;
+  }
+
+  .view-panel {
+    padding: 0.55rem 0.5rem 0.65rem;
+  }
+}
+
+/* Very short windows: allow page scroll so nothing is unreachable */
+@media (max-height: 26rem) {
+  body {
+    overflow: auto;
+  }
+
+  #app {
+    overflow: visible;
+  }
 }
