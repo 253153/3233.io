@@ -513,6 +513,7 @@ button.site-header-btn {
   outline-offset: 1px;
 }
 
+.footer-toggle,
 .theme-toggle {
   font-family: var(--font);
   font-size: 0.72rem;
@@ -530,14 +531,50 @@ button.site-header-btn {
   min-height: 28px;
 }
 
+.footer-toggle:hover,
 .theme-toggle:hover {
   color: var(--text);
   border-color: var(--accent);
 }
 
+.footer-toggle:focus-visible,
 .theme-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.notif-toggle .notif-toggle-glyph {
+  width: 0.9em;
+  height: 0.9em;
+  display: inline-block;
+  position: relative;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  /* Bell glyph, source: feather icons (MIT) — inlined to avoid an extra fetch */
+  --bell-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9'/><path d='M13.73 21a2 2 0 0 1-3.46 0'/></svg>");
+  mask-image: var(--bell-svg);
+  -webkit-mask-image: var(--bell-svg);
+}
+
+.notif-toggle.is-granted {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.notif-toggle.is-denied {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.notif-toggle.is-denied .notif-toggle-glyph {
+  --bell-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13.73 21a2 2 0 0 1-3.46 0'/><path d='M18.63 13A17.89 17.89 0 0 1 18 8'/><path d='M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14'/><path d='M18 8a6 6 0 0 0-9.33-5'/><line x1='1' y1='1' x2='23' y2='23'/></svg>");
+  mask-image: var(--bell-svg);
+  -webkit-mask-image: var(--bell-svg);
 }
 
 .panel {
@@ -1590,10 +1627,39 @@ button.dash-tab:last-child {
     padding: 0.4rem 0.65rem;
   }
 
+  .footer-meta .notif-toggle {
+    min-height: 32px;
+    padding: 0.4rem 0.6rem;
+  }
+
   .footer-meta .footer-link {
     min-height: 28px;
     display: inline-flex;
     align-items: center;
+  }
+}
+
+/* Very narrow phones: keep the bell icon, drop the label so the
+   footer chips fit on one line without wrapping oddly. */
+@media (max-width: 420px) {
+  .notif-toggle .notif-toggle-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .notif-toggle {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .notif-toggle .notif-toggle-glyph {
+    width: 1em;
+    height: 1em;
   }
 }
 

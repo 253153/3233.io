@@ -691,6 +691,97 @@ function applyTheme(theme: "dark" | "light") {
 
 applyTheme(getPreferredTheme());
 
+/* ------------------------------------------------------------------ */
+/*                         Browser notifications                       */
+/* ------------------------------------------------------------------ */
+
+type NotifPermission = "default" | "granted" | "denied" | "unsupported";
+
+function notifSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "Notification" in window &&
+    "serviceWorker" in navigator
+  );
+}
+
+function getNotifPermission(): NotifPermission {
+  if (!notifSupported()) return "unsupported";
+  const p = Notification.permission;
+  if (p === "granted" || p === "denied" || p === "default") return p;
+  return "default";
+}
+
+async function requestNotifPermission(): Promise<NotifPermission> {
+  if (!notifSupported()) return "unsupported";
+  try {
+    const res = await Notification.requestPermission();
+    return res === "granted" || res === "denied" || res === "default"
+      ? res
+      : "default";
+  } catch {
+    return getNotifPermission();
+  }
+}
+
+const NOTIF_BODY_MAX = 140;
+
+function buildNotifBody(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= NOTIF_BODY_MAX) return clean;
+  return `${clean.slice(0, NOTIF_BODY_MAX - 1)}…`;
+}
+
+type NotifPayload = {
+  title: string;
+  body: string;
+  senderFp: string;
+  msgId: number;
+};
+
+async function showLocalNotification(payload: NotifPayload): Promise<void> {
+  if (getNotifPermission() !== "granted") return;
+  const url = `/chats?chat=${encodeURIComponent(payload.senderFp)}`;
+  const options: NotificationOptions & { renotify?: boolean } = {
+    body: payload.body,
+    icon: "/icon-192.png",
+    badge: "/favicon-32.png",
+    tag: `3233-msg-${payload.senderFp}`,
+    renotify: true,
+    data: { url, senderFp: payload.senderFp, msgId: payload.msgId },
+  };
+
+  try {
+    if ("serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(payload.title, options);
+      return;
+    }
+  } catch {
+    /* fall back to page-level Notification */
+  }
+
+  try {
+    const n = new Notification(payload.title, options);
+    n.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        /* ignore */
+      }
+      try {
+        n.close();
+      } catch {
+        /* ignore */
+      }
+      const u = new URL(url, window.location.origin);
+      window.location.assign(u.toString());
+    };
+  } catch {
+    /* ignore: quota, insecure context, etc. */
+  }
+}
+
 async function main() {
   const { pair, fingerprint } = await loadOrCreateKeys();
 
@@ -989,7 +1080,20 @@ async function main() {
           rel="noopener noreferrer"
         >Source</a>
         <span class="footer-sep" aria-hidden="true">·</span>
-        <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle theme"></button>
+        <button
+          type="button"
+          class="footer-toggle notif-toggle"
+          id="notifToggle"
+          aria-pressed="false"
+          aria-label="Enable browser notifications"
+          title="Enable browser notifications"
+          hidden
+        >
+          <span class="notif-toggle-glyph" aria-hidden="true"></span>
+          <span class="notif-toggle-label">Notifications</span>
+        </button>
+        <span class="footer-sep footer-sep-notif" aria-hidden="true" hidden>·</span>
+        <button type="button" class="footer-toggle theme-toggle" id="themeToggle" aria-label="Toggle theme"></button>
       </p>
     </footer>
   `;
@@ -997,6 +1101,8 @@ async function main() {
   const liveIndicator = app.querySelector("#liveIndicator")!;
   const liveHint = app.querySelector("#liveHint")!;
   const themeToggle = app.querySelector<HTMLButtonElement>("#themeToggle")!;
+  const notifToggle = app.querySelector<HTMLButtonElement>("#notifToggle")!;
+  const notifSep = app.querySelector<HTMLSpanElement>(".footer-sep-notif")!;
 
   function updateThemeToggleLabel() {
     const current = document.documentElement.getAttribute("data-theme") ?? "dark";
@@ -1011,6 +1117,137 @@ async function main() {
     localStorage.setItem(LS_THEME, next);
     updateThemeToggleLabel();
   });
+
+  function updateNotifToggleUi() {
+    const state = getNotifPermission();
+    if (state === "unsupported") {
+      notifToggle.hidden = true;
+      notifSep.hidden = true;
+      return;
+    }
+    notifToggle.hidden = false;
+    notifSep.hidden = false;
+    notifToggle.classList.remove("is-granted", "is-denied", "is-default");
+    const label = notifToggle.querySelector<HTMLElement>(".notif-toggle-label")!;
+    if (state === "granted") {
+      notifToggle.classList.add("is-granted");
+      notifToggle.setAttribute("aria-pressed", "true");
+      notifToggle.setAttribute("aria-label", "Browser notifications enabled");
+      notifToggle.title =
+        "Browser notifications are on. To mute, use your browser site settings.";
+      label.textContent = "Alerts on";
+    } else if (state === "denied") {
+      notifToggle.classList.add("is-denied");
+      notifToggle.setAttribute("aria-pressed", "false");
+      notifToggle.setAttribute("aria-label", "Notifications blocked by browser");
+      notifToggle.title =
+        "Notifications are blocked. Enable them in your browser's site settings.";
+      label.textContent = "Alerts off";
+    } else {
+      notifToggle.classList.add("is-default");
+      notifToggle.setAttribute("aria-pressed", "false");
+      notifToggle.setAttribute("aria-label", "Enable browser notifications");
+      notifToggle.title = "Enable browser notifications for new messages.";
+      label.textContent = "Enable alerts";
+    }
+  }
+  updateNotifToggleUi();
+
+  notifToggle.addEventListener("click", async () => {
+    const state = getNotifPermission();
+    if (state === "unsupported") return;
+    if (state === "denied") {
+      setStatus(
+        liveHint as HTMLElement,
+        "Notifications blocked. Enable them in browser site settings.",
+        "err",
+        4000,
+      );
+      return;
+    }
+    if (state === "granted") {
+      setStatus(
+        liveHint as HTMLElement,
+        "Notifications are on.",
+        "ok",
+        1800,
+      );
+      return;
+    }
+    const next = await requestNotifPermission();
+    updateNotifToggleUi();
+    if (next === "granted") {
+      setStatus(
+        liveHint as HTMLElement,
+        "Notifications enabled.",
+        "ok",
+        2200,
+      );
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification("3233 · alerts enabled", {
+          body: "You'll be notified when new messages arrive.",
+          icon: "/icon-192.png",
+          badge: "/favicon-32.png",
+          tag: "3233-intro",
+        });
+      } catch {
+        /* ignore */
+      }
+    } else if (next === "denied") {
+      setStatus(
+        liveHint as HTMLElement,
+        "Notifications blocked. You can enable them later in browser settings.",
+        "err",
+        4000,
+      );
+    }
+  });
+
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") updateNotifToggleUi();
+  });
+
+  try {
+    const permApi = (navigator as unknown as {
+      permissions?: { query?: (d: { name: PermissionName }) => Promise<PermissionStatus> };
+    }).permissions;
+    if (permApi?.query) {
+      void permApi
+        .query({ name: "notifications" as PermissionName })
+        .then((status) => {
+          status.addEventListener("change", () => updateNotifToggleUi());
+        })
+        .catch(() => {
+          /* not all browsers expose Permissions API for notifications */
+        });
+    }
+  } catch {
+    /* ignore */
+  }
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (ev) => {
+      const d = ev.data as { type?: string; url?: string } | null;
+      if (!d || d.type !== "3233:notif-click") return;
+      const url = typeof d.url === "string" ? d.url : "/chats";
+      try {
+        const u = new URL(url, window.location.origin);
+        const fp = u.searchParams.get("chat");
+        if (fp) {
+          void (async () => {
+            const ok = await openChatWithFingerprint(fp);
+            if (ok) navigateToView("chats", { replace: true });
+            else navigateToView("chats");
+          })();
+        } else {
+          navigateToView("chats");
+        }
+      } catch {
+        navigateToView("chats");
+      }
+    });
+  }
   const serverUrlEl = app.querySelector<HTMLInputElement>("#serverUrl")!;
   const saveServer = app.querySelector("#saveServer")!;
   const statsIdentities = app.querySelector("#statsIdentities")!;
@@ -1040,7 +1277,7 @@ async function main() {
   const chatTabsEl = app.querySelector("#chatTabs")!;
   const mobileChatTabsEl = app.querySelector("#mobileChatTabs")!;
   const chatThread = app.querySelector<HTMLElement>("#chatThread")!;
-  const chatThreadHead = app.querySelector("#chatThreadHead")!;
+  const chatThreadHead = app.querySelector<HTMLElement>("#chatThreadHead")!;
   const chatMessages = app.querySelector("#chatMessages")!;
   const chatBodyEl = app.querySelector<HTMLTextAreaElement>("#chatBody")!;
   const chatSend = app.querySelector<HTMLButtonElement>("#chatSend")!;
@@ -1569,7 +1806,24 @@ async function main() {
     playIncomingMessageSound();
     const fp = entry.senderFp;
     if (!fp) return;
+
     const wasOpen = openChatIds.includes(fp);
+    const chatsPanel = app.querySelector<HTMLElement>("#view-chats");
+    const looksAtThisThread =
+      document.visibilityState === "visible" &&
+      chatsPanel !== null &&
+      !chatsPanel.hidden &&
+      activeChatFp === fp;
+
+    if (!looksAtThisThread) {
+      void showLocalNotification({
+        title: `New message · 3233:${fp.slice(0, 8)}`,
+        body: buildNotifBody(entry.text),
+        senderFp: fp,
+        msgId: entry.id,
+      });
+    }
+
     if (!wasOpen) {
       openChatIds.push(fp);
       saveOpenChats(openChatIds);

@@ -32,6 +32,7 @@ End-to-end encrypted chat over a minimal **relay** server. Clients generate **Na
 - **Realtime + polling:** WebSocket hint for new mail, plus REST fetch; periodic refresh (~30s).
 - **Local history:** Decrypted **Library** and per-thread **Chats** views; sent lines cached locally for thread display.
 - **Unread:** Red indicator on sidebar threads when there is new incoming mail you have not opened on the **Chats** screen (cursor stored in `localStorage`).
+- **Browser notifications:** Opt-in via the bell toggle in the footer. Fires on incoming messages when the tab is backgrounded or you're not viewing that thread; suppressed while you are. Clicking the notification focuses the tab and jumps to the sender's chat. Message previews are decrypted **client-side only**; the server never sees plaintext.
 - **Shortcuts (header):** New keys, copy invite link, copy address (fingerprint).
 
 ---
@@ -411,6 +412,7 @@ Server environment variables:
 - **Storage:** Keys, session token, open chats, sent-message cache, last-read cursors, and server URL live in **`localStorage`** (same origin).
 - **Message sounds:** A short beep plays on new incoming mail after you have interacted with the page once (browser autoplay policy).
 - **Unread dots:** Cleared when you view that thread on the **Chats** tab (not when the app is on other tabs with the same thread “selected” in memory).
+- **Notifications:** Opt-in via the bell toggle. Backed by the service worker so they appear while the tab is in the background. Notifications stay inside the tab's lifecycle — if the tab is fully closed, nothing fires. True "site closed" push would require adding VAPID-signed Web Push on the server (currently not implemented).
 
 ---
 
