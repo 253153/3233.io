@@ -8,9 +8,10 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        ConnectInfo, Path, Query, State,
     },
-    http::StatusCode,
+    http::{HeaderMap, Request, StatusCode},
+    middleware::{self, Next},
     response::Response,
     routing::{get, post},
     Json, Router,
@@ -19,21 +20,86 @@ use axum_extra::headers::authorization::{Authorization, Bearer};
 use axum_extra::typed_header::TypedHeaderRejection;
 use axum_extra::TypedHeader;
 use chrono::{Duration, Utc};
+use crypto_box::{
+    aead::{Aead, OsRng as BoxOsRng},
+    PublicKey as BoxPublicKey, SalsaBox, SecretKey as BoxSecretKey,
+};
 use dashmap::DashMap;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
 use std::env;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
 use tokio::sync::broadcast;
+use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// How long an unsolved PoP challenge lives before being dropped.
+const CHALLENGE_TTL_SEC: i64 = 60;
+/// Fixed size of the registration challenge bytes.
+const CHALLENGE_LEN: usize = 32;
+
+/// In-memory record of an outstanding registration challenge.
+#[derive(Clone)]
+pub struct PendingChallenge {
+    pub challenge: [u8; CHALLENGE_LEN],
+    pub expires_at: i64,
+}
+
+/// Simple token-bucket entry for our per-IP rate limiter.
+#[derive(Clone)]
+struct Bucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+/// Per-(scope, ip) leaky-bucket rate limiter. `capacity` tokens, refilled at
+/// `refill_per_sec`. `scope` lets us split buckets per endpoint class so that
+/// a noisy register endpoint doesn't starve `/v1/stats`.
+#[derive(Clone)]
+pub struct RateLimiter {
+    inner: Arc<DashMap<(String, IpAddr), Bucket>>,
+    capacity: f64,
+    refill_per_sec: f64,
+}
+
+impl RateLimiter {
+    pub fn new(capacity: u32, refill_per_sec: f64) -> Self {
+        Self {
+            inner: Arc::new(DashMap::new()),
+            capacity: capacity as f64,
+            refill_per_sec,
+        }
+    }
+
+    /// Returns true if the caller is allowed, false if they've been rate-limited.
+    pub fn check(&self, scope: &str, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        let key = (scope.to_string(), ip);
+        let mut entry = self.inner.entry(key).or_insert(Bucket {
+            tokens: self.capacity,
+            last_refill: now,
+        });
+        let elapsed = now.duration_since(entry.last_refill).as_secs_f64();
+        entry.tokens = (entry.tokens + elapsed * self.refill_per_sec).min(self.capacity);
+        entry.last_refill = now;
+        if entry.tokens >= 1.0 {
+            entry.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -44,6 +110,13 @@ pub struct AppState {
     pub max_message_bytes: usize,
     /// Per-recipient notify channel for new message ids.
     pub notify: Arc<DashMap<String, broadcast::Sender<i64>>>,
+    /// Long-lived NaCl box keypair the server publishes for PoP registration.
+    pub reg_public: [u8; 32],
+    pub reg_secret: Arc<Mutex<BoxSecretKey>>,
+    /// fingerprint(client_pk) -> outstanding challenge.
+    pub pending_challenges: Arc<DashMap<String, PendingChallenge>>,
+    /// Per-IP rate limiter for public endpoints.
+    pub limiter: RateLimiter,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,8 +126,23 @@ pub struct Claims {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RegisterChallengeBody {
+    pub public_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterChallengeResponse {
+    pub challenge: String,
+    pub server_public_key: String,
+    pub expires_in: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RegisterBody {
     pub public_key: String,
+    pub challenge: String,
+    pub proof_nonce: String,
+    pub proof_ciphertext: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -178,22 +266,123 @@ impl AppState {
     }
 }
 
+/// Issue a fresh proof-of-possession challenge for `public_key`.
+///
+/// The client must echo the challenge bytes back in `/v1/register`, encrypted
+/// with NaCl box to the server's registration pubkey. That proves they hold
+/// the secret half of `public_key` without either side exchanging it.
+async fn register_challenge(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterChallengeBody>,
+) -> Result<Json<RegisterChallengeResponse>, (StatusCode, String)> {
+    let pk = decode_base64_32(&body.public_key)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid public_key".to_string()))?;
+    let fingerprint = fingerprint_from_pubkey(&pk)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid public_key".to_string()))?;
+
+    let mut challenge = [0u8; CHALLENGE_LEN];
+    rand::thread_rng().fill_bytes(&mut challenge);
+    let expires_at = Utc::now().timestamp() + CHALLENGE_TTL_SEC;
+    state.pending_challenges.insert(
+        fingerprint,
+        PendingChallenge {
+            challenge,
+            expires_at,
+        },
+    );
+
+    Ok(Json(RegisterChallengeResponse {
+        challenge: base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            challenge,
+        ),
+        server_public_key: base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            state.reg_public,
+        ),
+        expires_in: CHALLENGE_TTL_SEC,
+    }))
+}
+
 async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterBody>,
 ) -> Result<Json<RegisterResponse>, (StatusCode, String)> {
-    let pk = decode_base64_32(&body.public_key).map_err(|_| {
+    let pk = decode_base64_32(&body.public_key)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid public_key".to_string()))?;
+    let fingerprint = fingerprint_from_pubkey(&pk)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid public_key".to_string()))?;
+
+    let claimed_challenge = decode_base64_len(&body.challenge, CHALLENGE_LEN)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid challenge".to_string()))?;
+    let proof_nonce_bytes = decode_base64_len(&body.proof_nonce, 24).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            "invalid public_key".to_string(),
+            "invalid proof_nonce (expect 24 bytes base64)".to_string(),
         )
     })?;
-    let fingerprint = fingerprint_from_pubkey(&pk).map_err(|_| {
-        (
+    let proof_ct = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &body.proof_ciphertext,
+    )
+    .or_else(|_| {
+        base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            &body.proof_ciphertext,
+        )
+    })
+    .map_err(|_| (StatusCode::BAD_REQUEST, "invalid proof_ciphertext".to_string()))?;
+
+    // Bound proof_ct size: challenge (32B) + Poly1305 tag (16B) == 48B exactly.
+    if proof_ct.len() != CHALLENGE_LEN + 16 {
+        return Err((
             StatusCode::BAD_REQUEST,
-            "invalid public_key".to_string(),
-        )
-    })?;
+            "invalid proof_ciphertext length".to_string(),
+        ));
+    }
+
+    // Atomically consume the outstanding challenge, if any.
+    let pending = state
+        .pending_challenges
+        .remove(&fingerprint)
+        .map(|(_, v)| v)
+        .ok_or((StatusCode::BAD_REQUEST, "no pending challenge".to_string()))?;
+
+    if Utc::now().timestamp() >= pending.expires_at {
+        return Err((StatusCode::BAD_REQUEST, "challenge expired".to_string()));
+    }
+
+    // Reject if the client sent a stale/mismatched challenge echo; both must
+    // equal the value we minted in /v1/register/challenge.
+    if claimed_challenge.as_slice() != pending.challenge.as_slice() {
+        return Err((StatusCode::BAD_REQUEST, "challenge mismatch".to_string()));
+    }
+
+    // NaCl-box decrypt with our registration secret + the claimed client pk.
+    // If this succeeds, the client proved they hold the secret half of `pk`.
+    let client_pub = BoxPublicKey::from(
+        <[u8; 32]>::try_from(pk.as_slice())
+            .map_err(|_| (StatusCode::BAD_REQUEST, "invalid public_key".to_string()))?,
+    );
+    let nonce = *crypto_box::Nonce::from_slice(&proof_nonce_bytes);
+
+    let decrypted = {
+        let sk = state.reg_secret.lock().await;
+        let bx = SalsaBox::new(&client_pub, &sk);
+        bx.decrypt(&nonce, proof_ct.as_slice()).map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "proof-of-possession failed".to_string(),
+            )
+        })?
+    };
+
+    if decrypted.as_slice() != pending.challenge.as_slice() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "proof-of-possession payload mismatch".to_string(),
+        ));
+    }
 
     let now = Utc::now().to_rfc3339();
     let r = sqlx::query(
@@ -550,7 +739,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, fingerprint: String) 
 }
 
 async fn purge_expired(pool: SqlitePool) {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    let mut interval = tokio::time::interval(StdDuration::from_secs(60));
     loop {
         interval.tick().await;
         let now = Utc::now().to_rfc3339();
@@ -568,12 +757,69 @@ async fn purge_expired(pool: SqlitePool) {
     }
 }
 
+async fn purge_challenges(pending: Arc<DashMap<String, PendingChallenge>>) {
+    let mut interval = tokio::time::interval(StdDuration::from_secs(30));
+    loop {
+        interval.tick().await;
+        let now = Utc::now().timestamp();
+        pending.retain(|_, c| c.expires_at > now);
+    }
+}
+
+/// Best-effort client-IP extraction. Honors `x-forwarded-for` when configured
+/// explicitly (see `TRUST_FORWARDED_FOR`), otherwise falls back to the TCP
+/// peer address. Ignoring `x-forwarded-for` by default keeps us safe when the
+/// server is exposed directly.
+fn client_ip(trust_xff: bool, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
+    if trust_xff {
+        if let Some(hv) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first) = hv.split(',').next() {
+                if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                    return ip;
+                }
+            }
+        }
+    }
+    peer.ip()
+}
+
+/// Rate-limit middleware that picks a scope from the request path.
+async fn rate_limit_mw(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    let trust_xff = env::var("TRUST_FORWARDED_FOR")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let ip = client_ip(trust_xff, req.headers(), peer);
+
+    // Group endpoints so noisy register calls can't starve `/v1/stats` etc.
+    let path = req.uri().path();
+    let scope = if path.starts_with("/v1/register") {
+        "register"
+    } else if path.starts_with("/v1/keys") {
+        "keys"
+    } else if path == "/v1/stats" {
+        "stats"
+    } else {
+        "other"
+    };
+
+    if !state.limiter.check(scope, ip) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "rate limited".to_string()));
+    }
+    Ok(next.run(req).await)
+}
+
 /// Build the axum router for the v1 API with the given state.
 ///
 /// Kept separate from [`run`] so integration tests can mount the same routes
 /// against a custom [`AppState`] (in-memory SQLite, short-lived JWTs, etc.).
 pub fn build_api_router(state: AppState) -> Router {
     Router::new()
+        .route("/v1/register/challenge", post(register_challenge))
         .route("/v1/register", post(register))
         .route("/v1/messages", post(post_message).get(get_messages))
         .route("/v1/me", get(get_me))
@@ -581,6 +827,10 @@ pub fn build_api_router(state: AppState) -> Router {
         .route("/v1/keys/{fingerprint}", get(get_public_key))
         .route("/v1/keys/search/{prefix}", get(search_keys))
         .route("/v1/ws", get(ws_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_mw,
+        ))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -600,6 +850,11 @@ pub async fn build_state_with_pool(
     max_message_bytes: usize,
 ) -> Result<AppState, sqlx::Error> {
     sqlx::migrate!("./migrations").run(&pool).await?;
+    let reg_secret = BoxSecretKey::generate(&mut BoxOsRng);
+    let reg_public: [u8; 32] = *reg_secret.public_key().as_bytes();
+    // Default bucket: 60 tokens capacity, refilled at 1 token per second, per
+    // (scope, ip) pair. Generous enough for humans, cheap to enforce.
+    let limiter = RateLimiter::new(60, 1.0);
     Ok(AppState {
         pool,
         jwt_secret: Arc::from(jwt_secret),
@@ -607,6 +862,10 @@ pub async fn build_state_with_pool(
         message_ttl_days,
         max_message_bytes,
         notify: Arc::new(DashMap::new()),
+        reg_public,
+        reg_secret: Arc::new(Mutex::new(reg_secret)),
+        pending_challenges: Arc::new(DashMap::new()),
+        limiter,
     })
 }
 
@@ -619,10 +878,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let database_url =
         env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:data.db?mode=rwc".to_string());
-    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| {
-        tracing::warn!("JWT_SECRET not set; using insecure dev default");
-        "dev-insecure-change-me".to_string()
-    });
+
+    let jwt_secret = load_jwt_secret()?;
+
     let jwt_expiry_sec: i64 = env::var("JWT_EXPIRY_SEC")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -643,7 +901,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = build_state_with_pool(
         pool.clone(),
-        jwt_secret.into_bytes(),
+        jwt_secret,
         jwt_expiry_sec,
         message_ttl_days,
         max_message_bytes,
@@ -651,6 +909,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     tokio::spawn(purge_expired(pool));
+    tokio::spawn(purge_challenges(state.pending_challenges.clone()));
 
     let api = build_api_router(state);
 
@@ -669,9 +928,58 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = bind.parse()?;
     tracing::info!("listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
+}
+
+/// Resolve the JWT secret, refusing to start with a weak/default value in
+/// production. The deliberate escape hatch for local development is
+/// `ALLOW_INSECURE_JWT_SECRET=1`.
+fn load_jwt_secret() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    const WEAK_DEFAULTS: &[&str] = &[
+        "dev-insecure-change-me",
+        "change-me",
+        "secret",
+        "changeme",
+        "",
+    ];
+
+    let allow_insecure = env::var("ALLOW_INSECURE_JWT_SECRET")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    match env::var("JWT_SECRET") {
+        Ok(s) => {
+            let weak = WEAK_DEFAULTS.contains(&s.as_str()) || s.len() < 32;
+            if weak && !allow_insecure {
+                return Err(format!(
+                    "JWT_SECRET looks weak (length {}). Set a secret of at least 32 bytes, or set ALLOW_INSECURE_JWT_SECRET=1 for local dev.",
+                    s.len()
+                )
+                .into());
+            }
+            if weak {
+                tracing::warn!(
+                    "JWT_SECRET is weak (length {}); ALLOW_INSECURE_JWT_SECRET=1 set.",
+                    s.len()
+                );
+            }
+            Ok(s.into_bytes())
+        }
+        Err(_) => {
+            if allow_insecure {
+                tracing::warn!("JWT_SECRET not set; using insecure dev default");
+                Ok(b"dev-insecure-change-me".to_vec())
+            } else {
+                Err("JWT_SECRET is not set. Export a 32+ byte secret, or set ALLOW_INSECURE_JWT_SECRET=1 for local dev.".into())
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -804,7 +1112,12 @@ pub mod test_support {
             .expect("bind ephemeral port");
         let addr = listener.local_addr().expect("local_addr");
         tokio::spawn(async move {
-            axum::serve(listener, app).await.ok();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .ok();
         });
         format!("http://{addr}")
     }

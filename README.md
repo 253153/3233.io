@@ -73,17 +73,28 @@ From repo root:
 
 ```bash
 cd server
-export JWT_SECRET=dev-secret
+export ALLOW_INSECURE_JWT_SECRET=1  # local dev only — ok for throwaway tokens
 cargo run
 ```
 
 Wait for `listening on http://...:3233` with no error after it.
 
+For anything non-throwaway, export a real secret instead of the escape hatch:
+
+```bash
+export JWT_SECRET=$(openssl rand -hex 32)
+cargo run
+```
+
+The server refuses to start when `JWT_SECRET` is missing or shorter than
+32 bytes, unless `ALLOW_INSECURE_JWT_SECRET=1` is set. Do not use that flag
+for deployed instances.
+
 **Port in use:** use another bind, then point the app **Server** tab at it:
 
 ```bash
 export BIND=127.0.0.1:3333
-export JWT_SECRET=dev-secret
+export JWT_SECRET=$(openssl rand -hex 32)
 cargo run
 ```
 
@@ -391,7 +402,9 @@ Server environment variables:
 |----------|---------|-------------|
 | `BIND` | `0.0.0.0:3233` | HTTP listen address |
 | `DATABASE_URL` | `sqlite:data.db?mode=rwc` | SQLite connection string |
-| `JWT_SECRET` | (dev default, **insecure**) | Symmetric key for JWTs |
+| `JWT_SECRET` | — (required) | Symmetric key for JWTs; must be ≥ 32 bytes. Server refuses to start without a strong secret unless `ALLOW_INSECURE_JWT_SECRET=1`. |
+| `ALLOW_INSECURE_JWT_SECRET` | `0` | **Dev only.** Set to `1` to accept a weak/absent `JWT_SECRET`; never set in production. |
+| `TRUST_FORWARDED_FOR` | `0` | Set to `1` when running behind a trusted reverse proxy so the per-IP rate limiter keys off `X-Forwarded-For`. |
 | `JWT_EXPIRY_SEC` | `604800` | Session lifetime (seconds) |
 | `MESSAGE_TTL_DAYS` | `14` | Offline ciphertext retention |
 | `MAX_MESSAGE_BYTES` | `262144` | Max payload size (ciphertext + nonce + sender pubkey) |

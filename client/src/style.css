@@ -426,6 +426,49 @@ button.site-header-btn {
   line-height: 1;
 }
 
+.invite-share-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.invite-share-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-right: 0.1rem;
+}
+
+.invite-share-btn {
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.45rem 0.75rem;
+  white-space: nowrap;
+}
+
+.invite-share-btn[hidden] {
+  display: none;
+}
+
+@media (max-width: 520px) {
+  .invite-share-row {
+    gap: 0.35rem;
+  }
+  .invite-share-label {
+    flex-basis: 100%;
+    margin: 0;
+  }
+  .invite-share-btn {
+    flex: 1 1 0;
+    min-width: 5rem;
+    justify-content: center;
+    padding: 0.55rem 0.5rem;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -738,7 +781,32 @@ button:hover {
 button.secondary {
   background: var(--bg);
   color: var(--text);
-  border-color: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+a.secondary {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font);
+  font-weight: 600;
+  padding: 0.45rem 0.85rem;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+a.secondary:hover {
+  color: var(--text);
+  filter: brightness(1.08);
+  text-decoration: none;
 }
 
 button:disabled {

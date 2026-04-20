@@ -74,7 +74,11 @@ export function escapeHtml(s: string): string {
   return d.innerHTML;
 }
 
-/** Shortest form of a fingerprint suitable for labels/titles. */
-export function shortFp(fullHex: string, chars = 10): string {
-  return `3233:${fullHex.slice(0, chars)}`;
+/**
+ * Shortest form of a fingerprint for labels/titles. Canonical UI form is the
+ * `3233:` prefix plus the first 32 hex chars of the full fingerprint — matches
+ * `shortFingerprint` in `crypto.ts` and is documented in `docs/PROTOCOL.md`.
+ */
+export function shortFp(fullHex: string): string {
+  return `3233:${fullHex.slice(0, 32)}`;
 }

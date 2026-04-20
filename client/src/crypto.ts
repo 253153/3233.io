@@ -49,3 +49,20 @@ export function decryptFromSender(
 ): Uint8Array | null {
   return nacl.box.open(ciphertext, nonce, senderPk, recipient.secretKey);
 }
+
+/**
+ * Produce a proof-of-possession of `sender`'s secret key by encrypting the
+ * server-issued `challenge` to the server's `serverPk` using NaCl box. The
+ * server recovers the plaintext with its own secret + `sender.publicKey`,
+ * which only succeeds if the caller holds the matching secret half.
+ */
+export function encryptChallengeForServer(
+  challenge: Uint8Array,
+  serverPk: Uint8Array,
+  sender: BoxKeyPair,
+): { ciphertext: Uint8Array; nonce: Uint8Array } {
+  const nonce = nacl.randomBytes(24);
+  const boxed = nacl.box(challenge, nonce, serverPk, sender.secretKey);
+  if (!boxed) throw new Error("challenge encryption failed");
+  return { ciphertext: boxed, nonce };
+}

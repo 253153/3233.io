@@ -25,21 +25,59 @@ After registration, clients send:
 Authorization: Bearer <JWT>
 ```
 
-JWT `sub` claim is the user’s **fingerprint** (64 hex chars). Tokens are issued by the server using `JWT_SECRET`.
+JWT `sub` claim is the user’s **fingerprint** (64 hex chars). Tokens are issued by the server using `JWT_SECRET`, which **must** be set to a 32+ byte value in production (the server refuses to start otherwise unless `ALLOW_INSECURE_JWT_SECRET=1` is explicitly set — see `server/README` / environment vars below).
+
+## Rate limits
+
+The server enforces a per-IP leaky-bucket limiter on all public endpoints
+(capacity 60 requests, refill 1 req/sec). Buckets are partitioned by endpoint
+class (`/v1/register*`, `/v1/keys*`, `/v1/stats`, other) so a noisy registration
+flow cannot starve lookups. Rejected requests get `429 Too Many Requests`. If
+the server is behind a trusted reverse proxy, set `TRUST_FORWARDED_FOR=1` so
+the limiter keys off `X-Forwarded-For` rather than the TCP peer.
 
 ## REST API
 
 Base path: `/v1`.
 
-### `POST /v1/register`
+### `POST /v1/register/challenge`
 
-Registers the public key and returns a session token.
+Requests a single-use proof-of-possession challenge for the given public key.
+The challenge is stored server-side for ~60 s, bound to the caller's
+fingerprint, and consumed (or expires unused) by the next `/v1/register` call.
 
 **Request JSON:**
 
-| Field         | Type   | Description                          |
-|---------------|--------|--------------------------------------|
-| `public_key`  | string | Base64 (standard, unpadded ok) 32-byte public key |
+| Field         | Type   | Description                                        |
+|---------------|--------|----------------------------------------------------|
+| `public_key`  | string | Base64 (standard or URL-safe) 32-byte public key   |
+
+**Response 200:**
+
+| Field               | Type   | Description                                  |
+|---------------------|--------|----------------------------------------------|
+| `challenge`         | string | Base64, 32 random bytes                      |
+| `server_public_key` | string | Base64, 32-byte X25519 key to encrypt to     |
+| `expires_in`        | number | Seconds until the challenge is purged        |
+
+**Errors:** `400` invalid key, `429` rate limited.
+
+### `POST /v1/register`
+
+Completes registration with a proof-of-possession of the caller's secret key,
+then returns a session token. The client proves possession by NaCl-boxing the
+challenge bytes to `server_public_key` with `(client_sk, server_pk)`; the
+server decrypts with `(server_sk, client_pk)`, confirming the caller holds the
+private half of `public_key` without ever exchanging it.
+
+**Request JSON:**
+
+| Field               | Type   | Description                                            |
+|---------------------|--------|--------------------------------------------------------|
+| `public_key`        | string | Base64 32-byte public key (same as challenge request)  |
+| `challenge`         | string | Base64 32-byte challenge echoed back verbatim          |
+| `proof_nonce`       | string | Base64 24-byte NaCl box nonce                          |
+| `proof_ciphertext`  | string | Base64 `box(challenge, proof_nonce, server_pk, client_sk)` — 48 bytes (32 + 16 tag) |
 
 **Response 200:**
 
@@ -49,7 +87,9 @@ Registers the public key and returns a session token.
 | `token`       | string | JWT for `Authorization` header     |
 | `expires_in`  | number | Token TTL seconds (informational)  |
 
-**Errors:** `400` invalid key, `409` key already registered (optional; may upsert instead).
+**Errors:** `400` invalid payload / no pending challenge / challenge expired /
+challenge mismatch, `401` proof-of-possession failed (decryption or plaintext
+mismatch), `429` rate limited.
 
 ### `POST /v1/messages`
 

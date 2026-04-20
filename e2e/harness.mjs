@@ -81,7 +81,9 @@ export async function startBackend({ log = () => {} } = {}) {
       cwd: SERVER_DIR,
       env: {
         ...process.env,
-        JWT_SECRET: "e2e-test-secret",
+        // 32+ bytes so the server's strong-secret check passes without
+        // needing the ALLOW_INSECURE_JWT_SECRET escape hatch.
+        JWT_SECRET: "e2e-test-secret-0000000000000000",
         BIND: `127.0.0.1:${port}`,
         STATIC_DIR: CLIENT_DIST,
         DATABASE_URL: `sqlite:${path.join(HERE, `.e2e-${port}.db`)}?mode=rwc`,

@@ -4,7 +4,11 @@ services:
     ports:
       - "3233:3233"
     environment:
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      # Required. Generate with: `openssl rand -hex 32`. The server will
+      # refuse to boot if this is missing or shorter than 32 bytes unless
+      # ALLOW_INSECURE_JWT_SECRET=1 is also set (dev only).
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set. Generate one with: openssl rand -hex 32}
+      TRUST_FORWARDED_FOR: ${TRUST_FORWARDED_FOR:-1}
       MESSAGE_TTL_DAYS: ${MESSAGE_TTL_DAYS:-14}
       MAX_MESSAGE_BYTES: ${MAX_MESSAGE_BYTES:-262144}
       JWT_EXPIRY_SEC: ${JWT_EXPIRY_SEC:-604800}

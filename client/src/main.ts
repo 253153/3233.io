@@ -3,6 +3,7 @@ import {
   b64decode,
   b64encode,
   decryptFromSender,
+  encryptChallengeForServer,
   encryptForRecipient,
   fingerprintFromPublicKey,
   generateKeyPair,
@@ -11,6 +12,7 @@ import {
 import { toQrDataUrl } from "./qr";
 import {
   buildNotifBody,
+  escapeHtml,
   localCasClaim,
   normalizeFingerprint,
   normalizePathname,
@@ -356,10 +358,42 @@ let onNewPolledEntries: ((entries: LibraryEntry[]) => void) | undefined;
 const NOTIF_BATCH_COALESCE_MIN = 4;
 
 async function register(pair: BoxKeyPair): Promise<{ ok: boolean; err?: string }> {
-  const r = await fetch(`${apiBase()}/v1/register`, {
+  // Step 1: ask the server for a single-use PoP challenge bound to our pubkey.
+  const chalResp = await fetch(`${apiBase()}/v1/register/challenge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ public_key: b64encode(pair.publicKey) }),
+  });
+  if (!chalResp.ok) {
+    const t = await chalResp.text();
+    return { ok: false, err: t || chalResp.statusText };
+  }
+  const chal = (await chalResp.json()) as {
+    challenge: string;
+    server_public_key: string;
+    expires_in: number;
+  };
+  const challenge = b64decode(chal.challenge);
+  const serverPk = b64decode(chal.server_public_key);
+
+  // Step 2: NaCl-box the challenge back to the server with our secret key.
+  // If our secret matches the claimed pubkey, the server can decrypt; that's
+  // the proof-of-possession.
+  const { ciphertext, nonce } = encryptChallengeForServer(
+    challenge,
+    serverPk,
+    pair,
+  );
+
+  const r = await fetch(`${apiBase()}/v1/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      public_key: b64encode(pair.publicKey),
+      challenge: chal.challenge,
+      proof_nonce: b64encode(nonce),
+      proof_ciphertext: b64encode(ciphertext),
+    }),
   });
   if (!r.ok) {
     const t = await r.text();
@@ -543,12 +577,45 @@ function decryptServerMessage(m: ServerMessage, pair: BoxKeyPair): LibraryEntry 
   };
 }
 
+/**
+ * Insert one entry while keeping `libraryEntries` sorted descending by id.
+ *
+ * Uses binary-search + splice (O(n) worst case per insert) instead of
+ * re-sorting the whole array (O(n log n) per insert), so full backfills stay
+ * linearithmic overall rather than quadratic.
+ */
 function mergeLibraryEntry(entry: LibraryEntry): boolean {
   if (libraryById.has(entry.id)) return false;
   libraryById.set(entry.id, entry);
-  libraryEntries.push(entry);
-  libraryEntries.sort((a, b) => b.id - a.id);
+  let lo = 0;
+  let hi = libraryEntries.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (libraryEntries[mid]!.id > entry.id) lo = mid + 1;
+    else hi = mid;
+  }
+  libraryEntries.splice(lo, 0, entry);
   return true;
+}
+
+/**
+ * Bulk-merge many entries at once. Deduplicates via `libraryById` then sorts
+ * only once at the end. Used by the initial history backfill where N messages
+ * arrive up-front and individual binary insertion would still be O(N log N)
+ * worth of splices.
+ */
+function mergeLibraryEntries(entries: LibraryEntry[]): LibraryEntry[] {
+  const added: LibraryEntry[] = [];
+  for (const e of entries) {
+    if (libraryById.has(e.id)) continue;
+    libraryById.set(e.id, e);
+    libraryEntries.push(e);
+    added.push(e);
+  }
+  if (added.length > 0) {
+    libraryEntries.sort((a, b) => b.id - a.id);
+  }
+  return added;
 }
 
 /** Load all stored messages once per session (paged on server). */
@@ -565,12 +632,13 @@ async function backfillLibrary(pair: BoxKeyPair): Promise<void> {
     if (!r.ok) break;
     const j = (await r.json()) as { messages: ServerMessage[] };
     if (j.messages.length === 0) break;
+    const batch: LibraryEntry[] = [];
     for (const m of j.messages) {
-      const entry = decryptServerMessage(m, pair);
-      mergeLibraryEntry(entry);
+      batch.push(decryptServerMessage(m, pair));
       lastMsgId = Math.max(lastMsgId, m.id);
       cursor = m.id;
     }
+    mergeLibraryEntries(batch);
     if (j.messages.length < FETCH_BATCH) break;
   }
   didFullBackfill = true;
@@ -986,6 +1054,13 @@ async function main() {
                   id="copyInviteLinkBtn"
                   aria-label="Copy invite link"
                 >Copy</button>
+              </div>
+              <div class="invite-share-row" role="group" aria-label="Send your invite link">
+                <span class="invite-share-label">Send via</span>
+                <button type="button" class="secondary invite-share-btn" id="shareInviteNative" hidden>Share…</button>
+                <a class="secondary invite-share-btn" id="shareInviteSms" role="button" rel="noopener noreferrer">Message</a>
+                <a class="secondary invite-share-btn" id="shareInviteWhatsapp" role="button" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                <a class="secondary invite-share-btn" id="shareInviteEmail" role="button" rel="noopener noreferrer">Email</a>
               </div>
             </div>
             <div class="share-field-group">
@@ -1435,6 +1510,10 @@ async function main() {
   const publicKeyShareInput = app.querySelector<HTMLInputElement>("#publicKeyShareInput")!;
   const copyInviteLinkBtn = app.querySelector<HTMLButtonElement>("#copyInviteLinkBtn")!;
   const copyPublicKeyBtn = app.querySelector<HTMLButtonElement>("#copyPublicKeyBtn")!;
+  const shareInviteNative = app.querySelector<HTMLButtonElement>("#shareInviteNative")!;
+  const shareInviteSms = app.querySelector<HTMLAnchorElement>("#shareInviteSms")!;
+  const shareInviteWhatsapp = app.querySelector<HTMLAnchorElement>("#shareInviteWhatsapp")!;
+  const shareInviteEmail = app.querySelector<HTMLAnchorElement>("#shareInviteEmail")!;
   const openChatFpEl = app.querySelector<HTMLInputElement>("#openChatFp")!;
   const openChatBtn = app.querySelector<HTMLButtonElement>("#openChatBtn")!;
   const chatThreadCopy = app.querySelector<HTMLButtonElement>("#chatThreadCopy")!;
@@ -1687,9 +1766,37 @@ async function main() {
     return u.toString();
   }
 
+  function buildInviteShareText(): {
+    title: string;
+    smsBody: string;
+    longBody: string;
+    url: string;
+  } {
+    const url = buildInviteLink();
+    const title = "Chat with me privately on 3233.io";
+    const smsBody = `Let's chat privately on 3233.io: ${url}`;
+    const longBody =
+      `You can reach me on 3233.io — an end-to-end encrypted chat relay. ` +
+      `No account needed. My address: ${shortFingerprint(fingerprint)}\n\n` +
+      `Open our thread: ${url}`;
+    return { title, smsBody, longBody, url };
+  }
+
+  function refreshInviteShareTargets() {
+    const { title, smsBody, longBody } = buildInviteShareText();
+    shareInviteSms.href = `sms:?body=${encodeURIComponent(smsBody)}`;
+    shareInviteWhatsapp.href = `https://wa.me/?text=${encodeURIComponent(smsBody)}`;
+    shareInviteEmail.href =
+      `mailto:?subject=${encodeURIComponent(title)}` +
+      `&body=${encodeURIComponent(longBody)}`;
+    const native = typeof navigator !== "undefined" && typeof navigator.share === "function";
+    shareInviteNative.hidden = !native;
+  }
+
   function updateInviteLinkDisplay() {
     const url = buildInviteLink();
     inviteLinkInput.value = url;
+    refreshInviteShareTargets();
   }
 
   function flashButtonLabel(btn: HTMLButtonElement, doneLabel: string, ms = 1000) {
@@ -1825,12 +1932,6 @@ async function main() {
       liveIndicator.classList.add("offline");
     }
     liveHint.textContent = hint;
-  }
-
-  function escapeHtml(s: string): string {
-    const d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
   }
 
   function buildChatTabNodes(): DocumentFragment {
@@ -2242,6 +2343,27 @@ async function main() {
     if (ok) flashButtonLabel(copyPublicKeyBtn, "Copied");
     else alert("Could not copy — select the text and copy manually, or try again over HTTPS.");
   });
+
+  shareInviteNative.addEventListener("click", async () => {
+    refreshInviteShareTargets();
+    const { title, longBody, url } = buildInviteShareText();
+    if (typeof navigator.share !== "function") return;
+    try {
+      await navigator.share({ title, text: longBody, url });
+      flashButtonLabel(shareInviteNative, "Shared");
+    } catch (err) {
+      if ((err as DOMException)?.name === "AbortError") return;
+      const ok = await copyTextToClipboard(url);
+      flashButtonLabel(
+        shareInviteNative,
+        ok ? "Link copied" : "Share failed",
+      );
+    }
+  });
+
+  for (const link of [shareInviteSms, shareInviteWhatsapp, shareInviteEmail]) {
+    link.addEventListener("click", () => refreshInviteShareTargets());
+  }
 
   chatThreadCopy.addEventListener("click", async () => {
     if (!activeChatFp) return;

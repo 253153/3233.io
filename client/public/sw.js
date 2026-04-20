@@ -1,4 +1,4 @@
-const CACHE_NAME = "3233-v2";
+const CACHE_NAME = "3233-v3";
 
 const PRECACHE = ["/", "/chats", "/newchat"];
 
@@ -29,14 +29,41 @@ self.addEventListener("fetch", (event) => {
 
   if (event.request.method !== "GET") return;
 
+  if (url.origin !== self.location.origin) return;
+
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+    (async () => {
+      try {
+        const response = await fetch(event.request);
+        // Only cache successful, basic responses. Avoids poisoning the cache
+        // with 404/500/opaque-redirect for SPA routes.
+        if (
+          response &&
+          response.ok &&
+          response.type === "basic" &&
+          response.status === 200
+        ) {
+          const clone = response.clone();
+          caches
+            .open(CACHE_NAME)
+            .then((cache) => cache.put(event.request, clone))
+            .catch(() => {});
+        }
         return response;
-      })
-      .catch(() => caches.match(event.request)),
+      } catch (_networkErr) {
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        // SPA fallback: for navigation requests, serve the app shell.
+        if (event.request.mode === "navigate") {
+          const shell = await caches.match("/");
+          if (shell) return shell;
+        }
+        return new Response("offline", {
+          status: 503,
+          statusText: "Service Unavailable",
+        });
+      }
+    })(),
   );
 });
 

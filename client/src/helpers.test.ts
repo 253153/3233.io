@@ -153,9 +153,8 @@ describe("escapeHtml", () => {
 });
 
 describe("shortFp", () => {
-  it("formats with prefix and default 10 chars", () => {
-    expect(shortFp("abcdef0123456789" + "x".repeat(48))).toBe(
-      "3233:abcdef0123",
-    );
+  it("formats with prefix and first 32 hex chars", () => {
+    const fp = "abcdef0123456789".repeat(4); // 64 hex chars
+    expect(shortFp(fp)).toBe("3233:abcdef0123456789abcdef0123456789");
   });
 });
