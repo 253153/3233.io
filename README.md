@@ -44,20 +44,56 @@ End-to-end encrypted chat over a minimal **relay** server. Clients generate **Na
 | `server/` | Rust HTTP API + WebSocket + SQLite (`cargo` workspace) |
 | `client/` | Vite + TypeScript SPA (`npm` workspace package) |
 | `docs/PROTOCOL.md` | v1 wire format and REST/WebSocket semantics |
-| `Dockerfile`, `docker-compose.yml` | Single-image / compose deployment |
+| `Dockerfile`, `docker-compose.yml`, `.dockerignore` | Container image and Compose stack (all at **repo root**, next to this file) |
+| `.env.example` | Sample variables — copy to `.env` for Docker Compose (`JWT_SECRET` is required) |
 | Root `package.json` | npm workspaces: `npm run dev` / `npm run build` delegate to `client/` |
 
 ---
 
 ## Quick start (Docker)
 
-Set a strong `JWT_SECRET` and run:
+Docker deployment uses files in the **repository root** (the directory that contains this `README.md`):
+
+| File | Purpose |
+|------|---------|
+| [`Dockerfile`](Dockerfile) | Multi-stage build: Node builds the SPA from `client/`, Rust builds `io3233-server` from `server/`, runtime image is Debian slim with the binary + static assets |
+| [`docker-compose.yml`](docker-compose.yml) | Runs one service on port **3233**, persists SQLite in a named volume |
+| [`.dockerignore`](.dockerignore) | Keeps the build context small |
+
+**Prerequisites:** [Docker Engine](https://docs.docker.com/engine/install/) and the [Compose plugin](https://docs.docker.com/compose/install/linux/) (`docker compose version` should work).
+
+**1. Environment** — Compose requires `JWT_SECRET` (32+ characters). From the repo root:
+
+```bash
+cp .env.example .env
+# Edit .env and set JWT_SECRET, or generate a minimal file in one step:
+printf 'JWT_SECRET=%s\nTRUST_FORWARDED_FOR=1\n' "$(openssl rand -hex 32)" > .env
+```
+
+If you run `docker compose` without a usable secret, Compose prints an error instead of starting with an empty variable.
+
+**2. Build and run** (from the same directory as `docker-compose.yml`):
 
 ```bash
 docker compose up --build
 ```
 
-Open `http://localhost:3233` — the UI is served by the same process when `STATIC_DIR` is set (as in the image). Register, share your **fingerprint** with contacts, paste theirs to open a chat. **Both parties must use the same relay** (or register on each host you use).
+Detached: `docker compose up -d --build`. Logs: `docker compose logs -f`.
+
+**3. Use the app** — open **http://localhost:3233**. The container serves the built UI and `/v1/*` API on one port (the image sets `STATIC_DIR` to the baked-in `client` build). SQLite lives in the **`io3233-data`** volume (`/app/data` in the container).
+
+Register, share your **fingerprint** with contacts, paste theirs to open a chat. **Both parties must use the same relay** (or register on each host you use).
+
+**Troubleshooting**
+
+| Symptom | What to try |
+|--------|-------------|
+| `JWT_SECRET must be set` | Add `.env` at the repo root with `JWT_SECRET=` and a value from `openssl rand -hex 32` (or longer). |
+| `Dockerfile` / `docker-compose.yml` not found | Run commands from the **repository root**, not `server/` or `client/`. |
+| Port 3233 already in use | Change the host mapping in `docker-compose.yml` (e.g. `"3322:3233"`) or free the port. |
+| Build errors | Ensure the full tree is present (`git clone` of this repo, not a partial copy). |
+
+For a **VPS** with nginx, TLS, and binding the app to localhost only, follow [Hosting on Debian with nginx (VPS)](#hosting-on-debian-with-nginx-vps).
 
 ---
 
@@ -299,7 +335,9 @@ cd /opt/3233.io
 git clone https://github.com/253153/3233.io.git .
 ```
 
-Create a strong secret and an environment file (Compose reads `.env` automatically):
+Confirm the deployment files exist: `ls Dockerfile docker-compose.yml` (both should be in `/opt/3233.io`).
+
+Create a strong secret and an environment file (Compose reads `.env` automatically). You can start from `cp .env.example .env` and set `JWT_SECRET`, or:
 
 ```bash
 openssl rand -hex 32 > /tmp/jwt.secret
@@ -396,7 +434,7 @@ Certbot edits nginx for HTTPS and schedules renewal (`certbot renew`). Use **`ht
 
 ## Configuration
 
-Server environment variables:
+Server environment variables below apply to **`cargo run`** and binary installs. The **[`Dockerfile`](Dockerfile)** bakes in `STATIC_DIR=/app/static`, `DATABASE_URL=sqlite:/app/data/data.db?mode=rwc`, and `BIND=0.0.0.0:3233`; override any of them in `docker-compose.yml` under `services.io3233.environment` if you need to.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
