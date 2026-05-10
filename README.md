@@ -1,3 +1,6 @@
+<img width="2172" height="724" alt="image" src="https://github.com/user-attachments/assets/1cc322f5-0775-4f36-ac1d-656fe8f26bd5" />
+
+
 # 3233.io
 
 End-to-end encrypted chat over a minimal **relay** server. Clients generate **NaCl `box`** key pairs in the browser; the server stores and forwards **ciphertext** only, with configurable offline retention. The web UI can target any deployment by **base URL** (self-host friendly).
