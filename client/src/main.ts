@@ -1009,21 +1009,23 @@ async function main() {
 
     <div class="app-shell">
       <aside class="app-sidebar" aria-label="Sidebar">
-        <nav class="dashboard-tabs sidebar-main-nav" role="tablist" aria-label="Main views">
-          <button type="button" role="tab" class="dash-tab active" data-view="newchat" aria-selected="true" id="tab-newchat">home</button>
-          <button type="button" role="tab" class="dash-tab" data-view="chats" aria-selected="false" id="tab-chats">chats</button>
-          <button type="button" role="tab" class="dash-tab" data-view="server" aria-selected="false" id="tab-server">server</button>
-          <button type="button" role="tab" class="dash-tab" data-view="keys" aria-selected="false" id="tab-keys">keys</button>
-          <button type="button" role="tab" class="dash-tab" data-view="library" aria-selected="false" id="tab-library">library</button>
-          <button type="button" role="tab" class="dash-tab" data-view="about" aria-selected="false" id="tab-about">about</button>
-        </nav>
-        <nav class="sidebar-external-nav" aria-label="External links">
+        <nav class="sidebar-main-nav" aria-label="Main views">
+          <div class="dashboard-tabs sidebar-tablist" role="tablist">
+            <button type="button" role="tab" class="dash-tab active" data-view="newchat" aria-selected="true" id="tab-newchat">home</button>
+            <button type="button" role="tab" class="dash-tab" data-view="chats" aria-selected="false" id="tab-chats">chats</button>
+            <button type="button" role="tab" class="dash-tab" data-view="server" aria-selected="false" id="tab-server">server</button>
+            <button type="button" role="tab" class="dash-tab" data-view="keys" aria-selected="false" id="tab-keys">keys</button>
+            <button type="button" role="tab" class="dash-tab" data-view="library" aria-selected="false" id="tab-library">library</button>
+            <button type="button" role="tab" class="dash-tab" data-view="about" aria-selected="false" id="tab-about">about</button>
+          </div>
           <a
             class="dash-tab dash-tab-external"
             href="https://3233.io/blog"
             target="_blank"
             rel="noopener noreferrer"
-          >blog<span class="dash-tab-ext-icon" aria-hidden="true">↗</span></a>
+            aria-label="3233.io blog (opens in new tab)"
+            title="Read the 3233.io blog"
+          ><span class="dash-tab-ext-label">blog</span><span class="dash-tab-ext-icon" aria-hidden="true">↗</span></a>
         </nav>
         <section class="sidebar-chats-panel" aria-label="Threads">
           <div class="sidebar-chat-tabs-wrap">

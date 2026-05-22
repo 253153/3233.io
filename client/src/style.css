@@ -199,12 +199,18 @@ a:hover {
 }
 
 /* Main views: vertical strip in the left sidebar */
-.sidebar-main-nav.dashboard-tabs {
+.sidebar-main-nav {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-tablist {
+  display: flex;
   flex-direction: column;
   flex-wrap: nowrap;
   align-items: stretch;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
 }
 
 .app-sidebar .dash-tab {
@@ -218,12 +224,6 @@ a:hover {
 
 .app-sidebar .dash-tab:last-child {
   border-bottom: none;
-}
-
-.sidebar-external-nav {
-  display: flex;
-  flex-direction: column;
-  border-bottom: 1px solid var(--border);
 }
 
 .app-sidebar .dash-tab-external {
@@ -1744,12 +1744,17 @@ button.dash-tab:last-child {
 
   /* Main nav wraps to a second row at narrow widths rather than scrolling
      horizontally — avoids hidden overflow and awkward scrollbars. Each tab
-     grows to share the row evenly. */
-  .sidebar-main-nav.dashboard-tabs {
+     grows to share the row evenly. The inner tablist is made layout-
+     transparent so its tab buttons flow as direct flex children of the
+     outer nav alongside the blog link (keeping tablist a11y semantics). */
+  .sidebar-main-nav {
     flex-direction: row;
     flex-wrap: wrap;
     overflow-x: visible;
-    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-tablist {
+    display: contents;
   }
 
   .app-sidebar .dash-tab {
@@ -1766,6 +1771,36 @@ button.dash-tab:last-child {
   .app-sidebar .dash-tab:last-child {
     border-right: none;
     border-bottom: none;
+  }
+
+  /* On the wrap row we drop the "blog" label and keep just the ↗ glyph so
+     the chip is small enough that 7 items fit on a single mobile row. If it
+     still wraps to its own line on the narrowest devices, flex: 0 0 auto
+     keeps it from stretching across the whole row (which is the bug fix:
+     before this rule it inherited flex: 1 1 auto and ballooned). */
+  .app-sidebar .dash-tab-external {
+    flex: 0 0 auto;
+    justify-content: center;
+    gap: 0;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  .app-sidebar .dash-tab-external .dash-tab-ext-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .app-sidebar .dash-tab-external .dash-tab-ext-icon {
+    color: var(--text);
+    font-size: 0.9rem;
   }
 
   .sidebar-chats-panel {
