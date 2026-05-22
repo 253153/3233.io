@@ -220,6 +220,31 @@ a:hover {
   border-bottom: none;
 }
 
+.sidebar-external-nav {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-sidebar .dash-tab-external {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.app-sidebar .dash-tab-external:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.dash-tab-ext-icon {
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
 .dash-tab {
   font: inherit;
   margin: 0;

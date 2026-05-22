@@ -1017,6 +1017,14 @@ async function main() {
           <button type="button" role="tab" class="dash-tab" data-view="library" aria-selected="false" id="tab-library">library</button>
           <button type="button" role="tab" class="dash-tab" data-view="about" aria-selected="false" id="tab-about">about</button>
         </nav>
+        <nav class="sidebar-external-nav" aria-label="External links">
+          <a
+            class="dash-tab dash-tab-external"
+            href="https://3233.io/blog"
+            target="_blank"
+            rel="noopener noreferrer"
+          >blog<span class="dash-tab-ext-icon" aria-hidden="true">↗</span></a>
+        </nav>
         <section class="sidebar-chats-panel" aria-label="Threads">
           <div class="sidebar-chat-tabs-wrap">
             <div id="chatTabs" class="chat-tabs chat-tabs--sidebar"></div>
