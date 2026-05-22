@@ -545,6 +545,19 @@ button.site-header-btn {
   border: 1px solid transparent;
 }
 
+.footer-meta .footer-link-discord {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  padding: 0.25rem 0.4rem;
+  min-height: 28px;
+}
+
+.footer-meta .footer-link-discord .footer-icon {
+  display: block;
+}
+
 .footer-meta .footer-link:hover {
   color: var(--text);
   border-color: var(--border);
